@@ -1,0 +1,8 @@
+{
+  "name": "元幕专用分镜智能体",
+  "description": "基于 Gemini AI 的专业级动漫分镜生成系统，支持原著知识库锚定、时空拆解算法及 Vidu 深度提示词优化。",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

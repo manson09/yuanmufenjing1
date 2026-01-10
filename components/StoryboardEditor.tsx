@@ -170,15 +170,15 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
             <div className="max-w-md mx-auto space-y-4">
               <div className="p-4 bg-white/5 rounded-2xl border border-white/5 text-left text-xs space-y-2">
                 <div className="flex justify-between items-center text-blue-400 font-bold">
-                  <span>动作原子化拆解 (挥拳 -> 瞳孔 -> 击中)</span>
+                  <span>{"动作原子化拆解 (挥拳 -> 瞳孔 -> 击中)"}</span>
                   <span className="animate-pulse">处理中...</span>
                 </div>
                 <div className="flex justify-between items-center text-indigo-400 font-bold">
-                  <span>情绪对峙拉长 (眼神 -> 汗滴 -> 武器颤动)</span>
+                  <span>{"情绪对峙拉长 (眼神 -> 汗滴 -> 武器颤动)"}</span>
                   <span className="animate-pulse">处理中...</span>
                 </div>
                 <div className="flex justify-between items-center text-green-400 font-bold">
-                  <span>系统/环境特效注入 (UI -> 金光 -> 气旋)</span>
+                  <span>{"系统/环境特效注入 (UI -> 金光 -> 气旋)"}</span>
                   <span className="animate-pulse">处理中...</span>
                 </div>
               </div>

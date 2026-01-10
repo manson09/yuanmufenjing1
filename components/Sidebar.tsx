@@ -12,7 +12,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, episodeCount
     <div className="w-64 bg-[#141414] border-r border-white/5 flex flex-col h-full">
       <div className="p-6 border-b border-white/5">
         <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent">
-          ViduAnime AI
+          元幕影视 AI
         </h1>
         <p className="text-xs text-gray-500 mt-1 uppercase tracking-widest font-semibold">专业级分镜生成</p>
       </div>

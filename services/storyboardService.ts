@@ -124,12 +124,7 @@ viduPrompt 只允许包含：
 肢体动作
 相机位置或运镜
 
-所有 viduPrompt 中涉及动态变化的画面，必须遵循以下隐含结构：
-明确初始状态，
-明确触发变化的动作或事件，
-明确变化过程中的形态或位置改变，
-明确变化结束后的最终稳定状态。
-禁止仅描述结果而不描述过程。
+
 **范例**：
 -动漫风格，暗夜森林谷口，近景，固定镜头。一枚高速飞来的蛛丝球从画面前方坠落，正面撞击地面。撞击瞬间，蛛丝球本体发生明显解体，球状结构迅速崩散消失，化为大量向外扩张的蛛丝。蛛丝在地面铺展成一张扁平的大型蛛网，紧密贴附在地表，网丝拉紧并固定，呈现出明显的黏附与束缚状态。
 1️⃣ 爆炸、 解体 、 展开类
@@ -293,7 +288,7 @@ viduPrompt 无法单独成立，
 
 export async function fetchShotsPart(scriptPart: string, range: string, startNo: number) {
     const response = await openai.chat.completions.create({
-      model: "openai/gpt-5.2",
+      model: "anthropic/claude-3.7-sonnet",
       messages: [
         { 
           role: "system", 

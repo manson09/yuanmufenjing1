@@ -321,8 +321,39 @@ export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promis
     if (!text) throw new Error("AI 返回内容为空");
     
     // 兼容不同的返回包裹格式
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed : (parsed.shots || parsed.items || Object.values(parsed)[0]);
+const parsed = JSON.parse(text);
+
+// 强健解析：逐层兜底，防止任何模型返回结构变形
+if (Array.isArray(parsed)) {
+  return parsed;
+}
+
+if (Array.isArray(parsed.shots)) {
+  return parsed.shots;
+}
+
+if (Array.isArray(parsed.items)) {
+  return parsed.items;
+}
+
+// 兼容 { data: { shots: [...] } }
+if (parsed.data) {
+  if (Array.isArray(parsed.data.shots)) {
+    return parsed.data.shots;
+  }
+  if (Array.isArray(parsed.data.items)) {
+    return parsed.data.items;
+  }
+}
+
+// 最后兜底：对象里第一个数组
+const firstArray = Object.values(parsed).find(v => Array.isArray(v));
+if (firstArray) {
+  return firstArray;
+}
+
+throw new Error("无法从模型返回中解析出分镜数组");
+;
   } catch (error) {
     console.error("分镜生成失败:", error);
     throw error;

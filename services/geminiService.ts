@@ -293,7 +293,7 @@ viduPrompt 无法单独成立，
 
 export async function fetchShotsPart(scriptPart: string, range: string, startNo: number) {
     const response = await openai.chat.completions.create({
-      model: "openai/gpt-5.2",
+      model: "google/gemini-3-pro-preview", 
       messages: [
         { 
           role: "system", 

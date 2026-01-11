@@ -66,7 +66,7 @@ const STORYBOARD_PROMPT = `
 --------------------------------
 镜头数量扩展规则（非常重要）
 
-本集镜头数量必须不少于 60。
+本集镜头数量必须在50至60个之间。
 
 当原著内容不足以支撑镜头数量时，
 你只能使用以下方式增加镜头：
@@ -265,7 +265,7 @@ viduPrompt 无法单独成立，
 - viduPrompt: (字符串) 视频生成提示词，必须中文
 
 硬性要求：
-1. 镜头数量不少于 60。
+1. 镜头数量要在50到60之间。
 2. 除 viduPrompt 外，其余字段严禁出现英文。
 3. 不允许返回 Markdown 代码块，只返回纯 JSON。
 --------------------------------
@@ -302,7 +302,7 @@ export async function fetchShotsPart(scriptPart: string, range: string, startNo:
 
           ------------------------------------------------
           【追加当前批次任务指令】：
-          1. 你现在正在执行第 ${range} 个分镜的生成任务，起始编号为 ${startNo}。
+          1. 必须一次性生成 50-60 个分镜，一个都不能少。
           2. 请严格基于上述所有【导演演绎区】、【动作与特效拆解规范】以及【viduPrompt 专用规则】进行创作。
           3. 每一个 viduPrompt 必须严格按照你刚才看到的 8 大类范例结构（初始、触发、过程、最终）进行解构，严禁简化。
           4. 为了确保 60 个分镜能够完整传输而不报错，请输出以下简写 JSON 格式（我会由程序自动还原）：
@@ -332,11 +332,11 @@ export async function fetchShotsPart(scriptPart: string, range: string, startNo:
     }
   }
 /**
- * 核心导出函数：一次性生成 60 个分镜
+ * 核心导出函数：一次性生成 50-60 个分镜
  */
 export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promise<Shot[]> {
   try {
-    console.log("正在执行单次全量生成：目标 60 个高质量分镜...");
+    console.log("正在执行单次全量生成：目标 50-60 个高质量分镜...");
 
     // 1. 不再切分剧本，直接传入完整剧本
     // 这里的 "1-60" 是传给 fetchShotsPart 的 range 参数

@@ -253,20 +253,21 @@ viduPrompt 无法单独成立，
 
 --------------------------------
 输出格式（严格要求）
-请按以下结构输出每一个分镜:
-镜头编号
-镜头时长(秒)
-景别
-镜头状态(固定或运镜)
-画面视觉描述(完整、具体)
-原著台词和人物在说该台词时的情绪(若无则留空)
-视频生成提示词(viduPrompt)
-请只返回 JSON 数组，不要任何解释。
-每一项全部使用中文：
+请只返回一个 JSON 对象，其根键名为 "shots"，对应一个数组。
+数组中每一项必须包含以下精确字段：
+- shotNumber: (整数) 镜头编号
+- duration: (字符串) 镜头时长，如 "3s"
+- shotType: (字符串) 景别，如 "特写"
+- movement: (字符串) 镜头状态，如 "固定"
+- visualDescription: (字符串) 画面视觉描述，必须中文
+- dialogue: (字符串) 原著台词和人物在说该台词时的情绪状态，必须中文
+- emotion: (字符串) 情绪，必须中文
+- viduPrompt: (字符串) 视频生成提示词，必须中文
+
 硬性要求：
-镜头数量不少于 60
-不允许返回多余文字
-不允许使用 Markdown
+1. 镜头数量不少于 60。
+2. 除 viduPrompt 外，其余字段严禁出现英文。
+3. 不允许返回 Markdown 代码块，只返回纯 JSON。
 --------------------------------
 自检规则（必须执行）
 
@@ -304,7 +305,10 @@ export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promis
   ${episode.script}
   =========================================
 
-  请执行“时空拆解算法”生成【60个以上】分镜。
+  【执行指令】：
+  1. 请执行“时空拆解算法”生成【60个以上】分镜。
+  2. 动作连贯性检查：在生成受击或反击分镜时，必须核对并复用前一个镜头中设定的技能颜色、形状和特效描述，确保视觉参数绝对统一。
+  3. 强制语言：除原著人物台词字段外，禁止输出任何英文，尤其严禁翻译剧本对话。
   `;
 
   try {
@@ -314,48 +318,49 @@ export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promis
         { role: "system", content: STORYBOARD_PROMPT },
         { role: "user", content: userPrompt }
       ],
-      response_format: { type: "json_object" } 
+      response_format: { type: "json_object" },
+      max_tokens: 4096 // 关键修改：增加 token 容量，防止 60 个镜头导致截断截断
     });
 
-    const text = response.choices[0].message.content;
+    let text = response.choices[0].message.content;
     if (!text) throw new Error("AI 返回内容为空");
     
-    // 兼容不同的返回包裹格式
-const parsed = JSON.parse(text);
+    // --- 自动容错与修复逻辑 ---
+    text = text.trim();
+    // 如果 JSON 被截断没写完，尝试强制补齐
+    if (!text.endsWith('}')) {
+        if (text.includes('"shots"')) {
+            if (!text.endsWith(']')) text += ']';
+            text += '}';
+        }
+    }
 
-// 强健解析：逐层兜底，防止任何模型返回结构变形
-if (Array.isArray(parsed)) {
-  return parsed;
-}
+    const parsed = JSON.parse(text);
+    
+    // 自动寻找分镜数组
+    let rawShots = [];
+    if (Array.isArray(parsed)) {
+        rawShots = parsed;
+    } else {
+        rawShots = parsed.shots || parsed.items || Object.values(parsed).find(v => Array.isArray(v)) || [];
+    }
 
-if (Array.isArray(parsed.shots)) {
-  return parsed.shots;
-}
+    // --- 核心字段映射修复：解决“有卡片没文字”的问题 ---
+    return rawShots.map((shot: any, index: number) => ({
+      shotNumber: shot.shotNumber || index + 1,
+      duration: shot.duration || "3s",
+      shotType: shot.shotType || "中景",
+      movement: shot.movement || "固定镜头",
+      // 这里的映射确保 AI 无论写成什么，前端都能读到对应的属性
+      visualDescription: shot.visualDescription || shot.description || shot.画面描述 || "无画面描述",
+      dialogue: shot.dialogue || shot.台词 || "",
+      emotion: shot.emotion || shot.情绪 || "中性",
+      viduPrompt: shot.viduPrompt || shot.prompt || ""
+    }));
 
-if (Array.isArray(parsed.items)) {
-  return parsed.items;
-}
-
-// 兼容 { data: { shots: [...] } }
-if (parsed.data) {
-  if (Array.isArray(parsed.data.shots)) {
-    return parsed.data.shots;
-  }
-  if (Array.isArray(parsed.data.items)) {
-    return parsed.data.items;
-  }
-}
-
-// 最后兜底：对象里第一个数组
-const firstArray = Object.values(parsed).find(v => Array.isArray(v));
-if (firstArray) {
-  return firstArray;
-}
-
-throw new Error("无法从模型返回中解析出分镜数组");
-;
   } catch (error) {
     console.error("分镜生成失败:", error);
-    throw error;
+    // 失败时返回空数组，防止界面白屏崩溃
+    return [];
   }
 }

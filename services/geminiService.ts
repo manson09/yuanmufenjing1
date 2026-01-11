@@ -301,59 +301,39 @@ export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promis
     const response = await openai.chat.completions.create({
       model: "openai/gpt-5.2",
       messages: [
-        { role: "system", content: `你是一位顶级动漫导演。请将剧本拆解为第 ${range} 个分镜。
-          要求：
-          1. 必须只返回 JSON，结构为 {"s": [{"n": 编号, "d": "时长", "t": "景别", "v": "画面描述", "p": "vidu提示词"}]}。
-          2. 所有字段必须是全中文。
-          3. 确保视觉连贯，复用特效描述。` },
-        { role: "user", content: `剧本片段：${scriptPart}` }
+        { 
+          role: "system", 
+          // 这里是关键：完整引用你在上面定义的那个巨大的 STORYBOARD_PROMPT 变量
+          content: `${STORYBOARD_PROMPT}
+
+          ------------------------------------------------
+          【追加当前批次任务指令】：
+          1. 你现在正在执行第 ${range} 个分镜的生成任务，起始编号为 ${startNo}。
+          2. 请严格基于上述所有【导演演绎区】、【动作与特效拆解规范】以及【viduPrompt 专用规则】进行创作。
+          3. 每一个 viduPrompt 必须严格按照你刚才看到的 8 大类范例结构（初始、触发、过程、最终）进行解构，严禁简化。
+          4. 为了确保 60 个分镜能够完整传输而不报错，请输出以下简写 JSON 格式（我会由程序自动还原）：
+             {"s": [{"n": 编号, "d": "时长", "t": "景别", "v": "画面描述", "p": "vidu提示词", "dialogue": "台词", "emotion": "情绪"}]}
+          5. 全程使用中文，禁止任何解释性文字。`
+        },
+        { role: "user", content: `【当前需处理剧本片段】：\n${scriptPart}` }
       ],
       response_format: { type: "json_object" },
-      max_tokens: 4096, // 设置在最稳定的传输区间
-      temperature: 0.5
+      max_tokens: 4096, 
+      temperature: 0.5 // 保持中等温度以兼顾创造力与规则遵循
     });
 
     const text = response.choices[0].message.content || "{}";
     try {
       const parsed = JSON.parse(text);
+      // 支持 s 或 shots 键名
       return Array.isArray(parsed) ? parsed : (parsed.s || parsed.shots || []);
     } catch (e) {
-      // 容错：如果 JSON 断开，正则抓取已完成的块
+      // 容错：如果 JSON 因过长而断开，正则抓取已完成的块
       const matches = text.match(/\{"n":[\s\S]*?\}/g);
-      return matches ? matches.map(m => JSON.parse(m + '}').catch(() => null)).filter(Boolean) : [];
+      return matches ? matches.map(m => {
+          try { return JSON.parse(m + '}'); } catch { 
+              try { return JSON.parse(m); } catch { return null; }
+          }
+      }).filter(Boolean) : [];
     }
   }
-
-  try {
-    console.log("正在分两批生成 60 个分镜...");
-    // 1. 将剧本切分为两半，确保每一批次生成的 30 个分镜都能完整传回
-    const mid = Math.floor(episode.script.length / 2);
-    const p1 = episode.script.substring(0, mid);
-    const p2 = episode.script.substring(mid);
-
-    // 2. 同时发起两个请求，保证速度
-    const [part1, part2] = await Promise.all([
-      fetchShotsPart(p1, "1-30", 1),
-      fetchShotsPart(p2, "31-60", 31)
-    ]);
-
-    const allRawShots = [...part1, ...part2];
-
-    // 3. 字段还原：将缩写字段映射回前端需要的 Shot 类型
-    return allRawShots.map((s: any, index: number) => ({
-      shotNumber: s.n || (index + 1),
-      duration: s.d || "3s",
-      shotType: s.t || "中景",
-      movement: "固定镜头",
-      visualDescription: s.v || "描述内容",
-      dialogue: "",
-      emotion: "中性",
-      viduPrompt: s.p || ""
-    }));
-
-  } catch (error: any) {
-    console.error("Gemini 生成失败:", error);
-    alert(`生成 60 个分镜失败：${error.message}\n请检查 API 余额或缩短剧本字数再试。`);
-    return [];
-  }
-}

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Episode, Shot, KBFile } from '../types';
-import { generateStoryboard } from '../services/storyboardService';
+import { generateStoryboard } from '../services/services/storyboardService';
 
 interface StoryboardEditorProps {
   episode: Episode;

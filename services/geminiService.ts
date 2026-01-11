@@ -307,66 +307,69 @@ export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promis
 
   【执行指令】：
   1. 请执行“时空拆解算法”生成【60个以上】分镜。
-  2. 【⏳ 全场景动作连贯性强力锁】 你必须维持跨镜头的视觉绝对统一。在生成每一个分镜（无论是移动、对峙、施法还是反馈）时，必须强制回溯前序镜头：
-
-特效继承：技能、光效、火焰的颜色与形态必须与初次出现时完全一致，严禁私自变更。
-
-空间继承：角色在上一镜站在哪、面向哪，本镜头必须逻辑自洽，严禁发生瞬间移动。
-
-状态继承：角色受伤的位置、衣服的破损程度、手中持握的道具（及尺寸），必须在后续所有镜头中保持同步。
-  3. 强制语言：除原著人物台词字段外，禁止输出任何英文，尤其严禁翻译剧本对话。
+  2. **强制全场景连贯性检查**：每一个分镜都必须核对并复用前序镜头中设定的技能颜色、特效形状、角色方位、伤口位置及道具特征。视觉参数一旦设定，必须在全场景内保持绝对统一。
+  3. **强制语言要求**：除了 viduPrompt 字段外，禁止输出任何英文，尤其严禁翻译剧本对话。
+  4. **画面逻辑**：确保 visualDescription 描述的是具体的动作拆解和物理反馈，而不是笼统的概括。
   `;
 
   try {
     const response = await openai.chat.completions.create({
-      model: "openai/gpt-5.2", 
+      // 精确匹配 OpenRouter 上的 Claude 3.7 Sonnet 路径
+      model: "anthropic/claude-3.7-sonnet", 
       messages: [
         { role: "system", content: STORYBOARD_PROMPT },
         { role: "user", content: userPrompt }
       ],
+      // 开启 JSON 强制格式，确保返回稳定
       response_format: { type: "json_object" },
-      max_tokens: 4096 // 关键修改：增加 token 容量，防止 60 个镜头导致截断截断
+      // 关键！60 个分镜需要极大的输出空间，防止截断导致空白界面
+      max_tokens: 8192, 
+      temperature: 0.5
     });
 
     let text = response.choices[0].message.content;
     if (!text) throw new Error("AI 返回内容为空");
     
-    // --- 自动容错与修复逻辑 ---
+    // --- 增强型 JSON 修复与兼容逻辑 ---
     text = text.trim();
-    // 如果 JSON 被截断没写完，尝试强制补齐
+    
+    // 自动闭合可能因网络或 Token 限制被截断的 JSON
     if (!text.endsWith('}')) {
-        if (text.includes('"shots"')) {
-            if (!text.endsWith(']')) text += ']';
-            text += '}';
-        }
+      if (text.includes('"shots"')) {
+        if (!text.endsWith(']')) text += ']';
+        text += '}';
+      }
     }
 
     const parsed = JSON.parse(text);
     
-    // 自动寻找分镜数组
+    // 深度搜索分镜数组，适配各种可能的 JSON 结构
     let rawShots = [];
     if (Array.isArray(parsed)) {
-        rawShots = parsed;
+      rawShots = parsed;
     } else {
-        rawShots = parsed.shots || parsed.items || Object.values(parsed).find(v => Array.isArray(v)) || [];
+      // 尝试从不同的 key (shots, items, data) 中抓取数组
+      rawShots = parsed.shots || parsed.items || parsed.data || Object.values(parsed).find(v => Array.isArray(v)) || [];
     }
 
-    // --- 核心字段映射修复：解决“有卡片没文字”的问题 ---
+    // --- 强制字段对齐：解决界面黑块无内容的核心步骤 ---
+    // 将 AI 返回的任何字段名强制映射到你前端需要的正确字段上
     return rawShots.map((shot: any, index: number) => ({
       shotNumber: shot.shotNumber || index + 1,
       duration: shot.duration || "3s",
       shotType: shot.shotType || "中景",
-      movement: shot.movement || "固定镜头",
-      // 这里的映射确保 AI 无论写成什么，前端都能读到对应的属性
-      visualDescription: shot.visualDescription || shot.description || shot.画面描述 || "无画面描述",
-      dialogue: shot.dialogue || shot.台词 || "",
-      emotion: shot.emotion || shot.情绪 || "中性",
+      movement: shot.movement || "固定",
+      // 只要 AI 返回了描述，无论叫什么名字都强制显示出来
+      visualDescription: shot.visualDescription || shot.description || shot.content || "无画面描述",
+      dialogue: shot.dialogue || shot.text || "",
+      emotion: shot.emotion || "中性",
       viduPrompt: shot.viduPrompt || shot.prompt || ""
     }));
 
-  } catch (error) {
-    console.error("分镜生成失败:", error);
-    // 失败时返回空数组，防止界面白屏崩溃
-    return [];
+  } catch (error: any) {
+    console.error("生成或解析失败:", error);
+    // 增加弹窗提醒，方便你直接在手机或网页上看到报错原因
+    alert(`分镜生成失败！\n原因: ${error.message}\n请检查 API 余额或剧本长度。`);
+    return []; 
   }
 }

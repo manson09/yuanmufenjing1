@@ -245,83 +245,58 @@ viduPrompt 无法单独成立，
 
 export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promise<Shot[]> {
   const kbContext = kb.length > 0 
-    ? kb.map(f => `【参考文档：${f.name}】\n${f.content}\n-------------------`).join('\n')
-    : "（暂无特定知识库，请严格基于剧本原文分析）";
-  
-  const userPrompt = `
-  【最高优先级：原著世界观与上下文设定】
-  ${kbContext}
+    ? kb.map(f => `【参考知识库】\n${f.content}`).join('\n')
+    : "无";
 
-  =========================================
-  【当前需要分镜的剧本片段】：
-  ${episode.script}
-  =========================================
-
-  【执行指令】：
-  1. 请执行“时空拆解算法”生成【60个以上】分镜。
-  2. **强制全场景连贯性检查**：每一个分镜都必须核对并复用前序镜头中设定的技能颜色、特效形状、角色方位、伤口位置及道具特征。视觉参数一旦设定，必须在全场景内保持绝对统一。
-  3. **强制语言要求**：除了原著台词字段外，禁止输出任何英文，尤其严禁翻译剧本对话。
-  4. **画面逻辑**：确保 visualDescription 描述的是具体的动作拆解和物理反馈，而不是笼统的概括。
-  `;
-
-  try {
+  // 定义单次生成的内部函数
+  async function fetchShots(scriptPart: string, range: string, startNumber: number) {
     const response = await openai.chat.completions.create({
-      // 精确匹配 OpenRouter 上的 Claude 3.7 Sonnet 路径
-      model: "anthropic/claude-3.7-sonnet", 
+      model: "anthropic/claude-3.7-sonnet", // 3.7 的逻辑理解最适合拆分任务
       messages: [
         { role: "system", content: STORYBOARD_PROMPT },
-        { role: "user", content: userPrompt }
+        { role: "user", content: `剧本片段：${scriptPart}\n请生成第 ${range} 个分镜，起始编号为 ${startNumber}。直接返回 JSON。` }
       ],
-      // 开启 JSON 强制格式，确保返回稳定
       response_format: { type: "json_object" },
-      // 关键！60 个分镜需要极大的输出空间，防止截断导致空白界面
-      max_tokens: 8192, 
-      temperature: 0.5
+      max_tokens: 4000, 
+      temperature: 0.3
     });
 
-    let text = response.choices[0].message.content;
-    if (!text) throw new Error("AI 返回内容为空");
-    
-    // --- 增强型 JSON 修复与兼容逻辑 ---
-    text = text.trim();
-    
-    // 自动闭合可能因网络或 Token 限制被截断的 JSON
-    if (!text.endsWith('}')) {
-      if (text.includes('"shots"')) {
-        if (!text.endsWith(']')) text += ']';
-        text += '}';
-      }
-    }
-
+    const text = response.choices[0].message.content || "{}";
     const parsed = JSON.parse(text);
-    
-    // 深度搜索分镜数组，适配各种可能的 JSON 结构
-    let rawShots = [];
-    if (Array.isArray(parsed)) {
-      rawShots = parsed;
-    } else {
-      // 尝试从不同的 key (shots, items, data) 中抓取数组
-      rawShots = parsed.shots || parsed.items || parsed.data || Object.values(parsed).find(v => Array.isArray(v)) || [];
-    }
+    return Array.isArray(parsed) ? parsed : (parsed.shots || []);
+  }
 
-    // --- 强制字段对齐：解决界面黑块无内容的核心步骤 ---
-    // 将 AI 返回的任何字段名强制映射到你前端需要的正确字段上
-    return rawShots.map((shot: any, index: number) => ({
+  try {
+    // 将剧本简单拆分为前后两半
+    const scriptLen = episode.script.length;
+    const part1 = episode.script.substring(0, Math.floor(scriptLen / 2));
+    const part2 = episode.script.substring(Math.floor(scriptLen / 2));
+
+    console.log("启动分段生成模式...");
+    
+    // 并行请求：同时生成前半段和后半段
+    const [shots1, shots2] = await Promise.all([
+      fetchShots(part1, "1-30", 1),
+      fetchShots(part2, "31-60", 31)
+    ]);
+
+    const allShots = [...shots1, ...shots2];
+
+    // 统一映射字段
+    return allShots.map((shot: any, index: number) => ({
       shotNumber: shot.shotNumber || index + 1,
       duration: shot.duration || "3s",
       shotType: shot.shotType || "中景",
       movement: shot.movement || "固定",
-      // 只要 AI 返回了描述，无论叫什么名字都强制显示出来
-      visualDescription: shot.visualDescription || shot.description || shot.content || "无画面描述",
-      dialogue: shot.dialogue || shot.text || "",
+      visualDescription: shot.visualDescription || shot.description || "描述生成中",
+      dialogue: shot.dialogue || "",
       emotion: shot.emotion || "中性",
       viduPrompt: shot.viduPrompt || shot.prompt || ""
     }));
 
   } catch (error: any) {
-    console.error("生成或解析失败:", error);
-    // 增加弹窗提醒，方便你直接在手机或网页上看到报错原因
-    alert(`分镜生成失败！\n原因: ${error.message}\n请检查 API 余额或剧本长度。`);
-    return []; 
+    console.error("分段生成失败:", error);
+    alert(`生成失败：${error.message}\n建议：剧本内容可能依然过长，请尝试减少输入的剧本字数。`);
+    return [];
   }
 }

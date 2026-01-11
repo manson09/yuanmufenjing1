@@ -302,7 +302,7 @@ export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promis
 
   try {
     const response = await openai.chat.completions.create({
-      model: "google/gemini-3-pro-preview", 
+      model: "openai/gpt-5.2", 
       messages: [
         { role: "system", content: STORYBOARD_PROMPT },
         { role: "user", content: userPrompt }

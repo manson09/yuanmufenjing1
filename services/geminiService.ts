@@ -251,7 +251,7 @@ export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promis
   // 定义内部生成函数：使用缩写字段最大限度节省空间，防止 Unterminated string 报错
   async function fetchShotsPart(scriptPart: string, range: string, startNo: number) {
     const response = await openai.chat.completions.create({
-      model: "google/gemini-3-pro-preview", // 切换回 Gemini 3 Pro Preview
+      model: "openai/gpt-5.2",
       messages: [
         { role: "system", content: `你是一位顶级动漫导演。请将剧本拆解为第 ${range} 个分镜。
           要求：

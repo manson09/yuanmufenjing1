@@ -101,7 +101,7 @@ export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promis
 
   try {
     const response = await openai.chat.completions.create({
-      model: "anthropic/claude-3.7-sonnet", 
+      model: "openai/gpt-5.2",
       messages: [
         { role: "system", content: STORYBOARD_PROMPT },
         { role: "user", content: userPrompt }

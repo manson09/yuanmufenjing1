@@ -331,3 +331,43 @@ export async function fetchShotsPart(scriptPart: string, range: string, startNo:
       }).filter(Boolean) : [];
     }
   }
+/**
+ * 核心导出函数：供 StoryboardEditor.tsx 组件调用
+ * 功能：将剧本平分为两段，并行请求以生成完整的 60 个分镜
+ */
+export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promise<Shot[]> {
+  try {
+    // 1. 将剧本逻辑切分为前后两半
+    const script = episode.script;
+    const midPoint = Math.floor(script.length / 2);
+    const part1Script = script.substring(0, midPoint);
+    const part2Script = script.substring(midPoint);
+
+    console.log("正在发起并行分镜生成请求...");
+
+    // 2. 同时发起两个请求（1-30镜 和 31-60镜）
+    const [rawPart1, rawPart2] = await Promise.all([
+      fetchShotsPart(part1Script, "1-30", 1),
+      fetchShotsPart(part2Script, "31-60", 31)
+    ]);
+
+    // 3. 合并数据并统一映射回标准格式 (将简写的 s 还原为组件识别的 Shot 格式)
+    const combinedRaw = [...rawPart1, ...rawPart2];
+    
+    return combinedRaw.map((s: any, index: number) => ({
+      shotNumber: s.n || (index + 1),
+      duration: s.d || "3s",
+      shotType: s.t || "中景",
+      movement: "固定镜头",
+      visualDescription: s.v || "描述内容",
+      dialogue: s.dialogue || "",
+      emotion: s.emotion || "中性",
+      viduPrompt: s.p || ""
+    }));
+
+  } catch (error: any) {
+    console.error("分镜生成主流程失败:", error);
+    // 返回空数组防止页面崩溃
+    return [];
+  }
+}

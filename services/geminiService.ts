@@ -248,55 +248,64 @@ export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promis
     ? kb.map(f => `【参考知识库】\n${f.content}`).join('\n')
     : "无";
 
-  // 定义单次生成的内部函数
-  async function fetchShots(scriptPart: string, range: string, startNumber: number) {
+  // 定义内部生成函数：使用缩写字段最大限度节省空间，防止 Unterminated string 报错
+  async function fetchShotsPart(scriptPart: string, range: string, startNo: number) {
     const response = await openai.chat.completions.create({
-      model: "anthropic/claude-3.7-sonnet", // 3.7 的逻辑理解最适合拆分任务
+      model: "google/gemini-3-pro-preview", // 切换回 Gemini 3 Pro Preview
       messages: [
-        { role: "system", content: STORYBOARD_PROMPT },
-        { role: "user", content: `剧本片段：${scriptPart}\n请生成第 ${range} 个分镜，起始编号为 ${startNumber}。直接返回 JSON。` }
+        { role: "system", content: `你是一位顶级动漫导演。请将剧本拆解为第 ${range} 个分镜。
+          要求：
+          1. 必须只返回 JSON，结构为 {"s": [{"n": 编号, "d": "时长", "t": "景别", "v": "画面描述", "p": "vidu提示词"}]}。
+          2. 使用缩写字段以节省空间。
+          3. 确保视觉连贯，复用特效描述。` },
+        { role: "user", content: `剧本片段：${scriptPart}` }
       ],
       response_format: { type: "json_object" },
-      max_tokens: 4000, 
-      temperature: 0.3
+      max_tokens: 4096, // 设置在最稳定的传输区间
+      temperature: 0.5
     });
 
     const text = response.choices[0].message.content || "{}";
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed : (parsed.shots || []);
+    try {
+      const parsed = JSON.parse(text);
+      return Array.isArray(parsed) ? parsed : (parsed.s || parsed.shots || []);
+    } catch (e) {
+      // 容错：如果 JSON 断开，正则抓取已完成的块
+      const matches = text.match(/\{"n":[\s\S]*?\}/g);
+      return matches ? matches.map(m => JSON.parse(m + '}').catch(() => null)).filter(Boolean) : [];
+    }
   }
 
   try {
-    // 将剧本简单拆分为前后两半
-    const scriptLen = episode.script.length;
-    const part1 = episode.script.substring(0, Math.floor(scriptLen / 2));
-    const part2 = episode.script.substring(Math.floor(scriptLen / 2));
+    console.log("正在分两批生成 60 个分镜...");
+    // 1. 将剧本切分为两半，确保每一批次生成的 30 个分镜都能完整传回
+    const mid = Math.floor(episode.script.length / 2);
+    const p1 = episode.script.substring(0, mid);
+    const p2 = episode.script.substring(mid);
 
-    console.log("启动分段生成模式...");
-    
-    // 并行请求：同时生成前半段和后半段
-    const [shots1, shots2] = await Promise.all([
-      fetchShots(part1, "1-30", 1),
-      fetchShots(part2, "31-60", 31)
+    // 2. 同时发起两个请求，保证速度
+    const [part1, part2] = await Promise.all([
+      fetchShotsPart(p1, "1-30", 1),
+      fetchShotsPart(p2, "31-60", 31)
     ]);
 
-    const allShots = [...shots1, ...shots2];
+    const allRawShots = [...part1, ...part2];
 
-    // 统一映射字段
-    return allShots.map((shot: any, index: number) => ({
-      shotNumber: shot.shotNumber || index + 1,
-      duration: shot.duration || "3s",
-      shotType: shot.shotType || "中景",
-      movement: shot.movement || "固定",
-      visualDescription: shot.visualDescription || shot.description || "描述生成中",
-      dialogue: shot.dialogue || "",
-      emotion: shot.emotion || "中性",
-      viduPrompt: shot.viduPrompt || shot.prompt || ""
+    // 3. 字段还原：将缩写字段映射回前端需要的 Shot 类型
+    return allRawShots.map((s: any, index: number) => ({
+      shotNumber: s.n || (index + 1),
+      duration: s.d || "3s",
+      shotType: s.t || "中景",
+      movement: "固定镜头",
+      visualDescription: s.v || "描述内容",
+      dialogue: "",
+      emotion: "中性",
+      viduPrompt: s.p || ""
     }));
 
   } catch (error: any) {
-    console.error("分段生成失败:", error);
-    alert(`生成失败：${error.message}\n建议：剧本内容可能依然过长，请尝试减少输入的剧本字数。`);
+    console.error("Gemini 生成失败:", error);
+    alert(`生成 60 个分镜失败：${error.message}\n请检查 API 余额或缩短剧本字数再试。`);
     return [];
   }
 }

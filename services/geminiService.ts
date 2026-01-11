@@ -291,13 +291,7 @@ viduPrompt 无法单独成立，
 你必须保持镜头内容保守，而不是创造新剧情
 `;
 
-export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promise<Shot[]> {
-  const kbContext = kb.length > 0 
-    ? kb.map(f => `【参考知识库】\n${f.content}`).join('\n')
-    : "无";
-
-  // 定义内部生成函数：使用缩写字段最大限度节省空间，防止 Unterminated string 报错
-  async function fetchShotsPart(scriptPart: string, range: string, startNo: number) {
+export async function fetchShotsPart(scriptPart: string, range: string, startNo: number) {
     const response = await openai.chat.completions.create({
       model: "openai/gpt-5.2",
       messages: [

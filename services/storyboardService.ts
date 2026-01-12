@@ -199,8 +199,12 @@ function injectActionCarryover(
       `【动作继承】承接上一镜头未完成的动作：${coreAction}。\n` +
       (currentShot.visualDescription || ""),
     viduPrompt:
-      `承接上一镜头未完成的动作：${coreAction}，该动作在本镜头开始时仍处于进行中。\n` +
-      (currentShot.viduPrompt || "")
+  `【未完成动作继承】
+  上一镜头中已启动但尚未接触的动作在本镜头开始时仍在进行中：
+  该动作的当前物理状态为【仍处于空中｜尚未接触目标｜正在接近目标】。
+  请以“动作仍未发生接触”为前提继续描写。\n` +
+  (currentShot.viduPrompt || "")
+
   };
 }
 export async function generateStoryboard(

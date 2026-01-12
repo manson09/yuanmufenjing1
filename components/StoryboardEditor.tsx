@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Episode, Shot, KBFile } from '../types';
-import { generateStoryboard } from '../services/storyboardService';
+import { generateStoryboard, regenerateSingleShot } from '../services/storyboardService';
 
 interface StoryboardEditorProps {
   episode: Episode;
@@ -12,18 +12,59 @@ interface StoryboardEditorProps {
 const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpdate, onBack }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [currentBatch, setCurrentBatch] = useState(0); // 0: 1-20, 1: 21-40, 2: 41-60
 
+  // 1. 初始生成逻辑（只出前20个）
   const handleGenerate = async () => {
     setIsGenerating(true);
     setError(null);
     try {
-      const shots = await generateStoryboard(episode, kb);
-      onUpdate({ shots, status: 'completed' });
+      // 这里的 0 代表第一批次，[] 代表没有上文
+      const shots = await generateStoryboard(episode, kb, 0, []);
+      onUpdate({ shots, status: 'generating' });
+      setCurrentBatch(0);
     } catch (err) {
-      setError('生成失败。请确保剧本内容有足够的动作节点，或尝试分段生成。');
+      setError('生成失败。请检查 API 配置或网络。');
       console.error(err);
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  // 2. 继续生成后续逻辑
+  const handleContinue = async () => {
+    setIsGenerating(true);
+    setError(null);
+    try {
+      const nextBatch = currentBatch + 1;
+      // 传入当前 batch 索引和已有的 shots 作为参考
+      const moreShots = await generateStoryboard(episode, kb, nextBatch, episode.shots);
+      onUpdate({ 
+        shots: [...episode.shots, ...moreShots], 
+        status: nextBatch === 2 ? 'completed' : 'generating' 
+      });
+      setCurrentBatch(nextBatch);
+    } catch (err) {
+      setError('追加生成失败，请重试。');
+      console.error(err);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // 3. 单镜头重刷逻辑
+  const handleRegenerateShot = async (index: number) => {
+    const target = episode.shots[index];
+    const prev = index > 0 ? episode.shots[index - 1] : undefined;
+    
+    try {
+      // 这里需要确保你在 storyboardService 里导出了这个函数
+      const newShot = await regenerateSingleShot(episode, kb, target, prev);
+      const updatedShots = [...episode.shots];
+      updatedShots[index] = newShot;
+      onUpdate({ shots: updatedShots });
+    } catch (err) {
+      alert('重刷该镜头失败');
     }
   };
 
@@ -98,14 +139,10 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
           <div>
             <h2 className="text-xl font-bold text-white flex items-center">
               {episode.title}
-              {episode.shots.length > 0 && <span className="ml-3 px-2 py-0.5 bg-indigo-600/20 text-indigo-400 text-[10px] rounded uppercase border border-indigo-600/30 font-black">60+ 高密度模式</span>}
+              {episode.shots.length > 0 && <span className="ml-3 px-2 py-0.5 bg-indigo-600/20 text-indigo-400 text-[10px] rounded uppercase border border-indigo-600/30 font-black">20 镜分布式模式</span>}
             </h2>
             <div className="flex items-center space-x-4 mt-1">
-              <span className="text-xs text-gray-500 font-bold">累计镜头数：{episode.shots.length}</span>
-              <div className="flex items-center space-x-1">
-                <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></div>
-                <span className="text-[10px] text-blue-500 uppercase font-black tracking-tighter">原子化拆解已激活</span>
-              </div>
+              <span className="text-xs text-gray-500 font-bold">已生成镜头：{episode.shots.length} / 60</span>
             </div>
           </div>
         </div>
@@ -113,12 +150,9 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
           {episode.shots.length > 0 && (
             <button
               onClick={exportToWord}
-              className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl flex items-center space-x-2 transition-all text-xs font-black shadow-lg shadow-indigo-900/20"
+              className="px-4 py-2 bg-white/5 hover:bg-white/10 text-white rounded-xl flex items-center space-x-2 transition-all text-xs font-black border border-white/10"
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              <span>导出专业 Word 表格</span>
+              <span>导出 Word</span>
             </button>
           )}
           <button
@@ -129,17 +163,9 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
             }`}
           >
             {isGenerating ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                <span className="text-sm">时空拆解计算中...</span>
-              </>
+              <span className="text-sm">计算中...</span>
             ) : (
-              <>
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-                <span className="text-sm">{episode.shots.length > 0 ? '重新生成（重置）' : '开始智能分镜生成'}</span>
-              </>
+              <span className="text-sm">{episode.shots.length > 0 ? '重置并重新生成' : '开始智能生成'}</span>
             )}
           </button>
         </div>
@@ -148,73 +174,46 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
       <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
         {error && (
           <div className="mb-8 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-500 text-sm flex items-center space-x-3">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
             <span>{error}</span>
           </div>
         )}
 
-        {isGenerating && (
-          <div className="flex flex-col items-center justify-center h-full py-20 text-center">
-            <div className="w-24 h-24 mb-10 relative">
-              <div className="absolute inset-0 border-4 border-blue-500/20 rounded-full"></div>
-              <div className="absolute inset-0 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-              <div className="absolute inset-4 bg-blue-500/10 rounded-full flex items-center justify-center">
-                <svg className="w-10 h-10 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              </div>
-            </div>
-            <h3 className="text-2xl font-black text-white mb-4">执行 60+ 镜头高密度重组</h3>
-            <div className="max-w-md mx-auto space-y-4">
-              <div className="p-4 bg-white/5 rounded-2xl border border-white/5 text-left text-xs space-y-2">
-                <div className="flex justify-between items-center text-blue-400 font-bold">
-                  <span>{"动作原子化拆解 (挥拳 -> 瞳孔 -> 击中)"}</span>
-                  <span className="animate-pulse">处理中...</span>
-                </div>
-                <div className="flex justify-between items-center text-indigo-400 font-bold">
-                  <span>{"情绪对峙拉长 (眼神 -> 汗滴 -> 武器颤动)"}</span>
-                  <span className="animate-pulse">处理中...</span>
-                </div>
-                <div className="flex justify-between items-center text-green-400 font-bold">
-                  <span>{"系统/环境特效注入 (UI -> 金光 -> 气旋)"}</span>
-                  <span className="animate-pulse">处理中...</span>
-                </div>
-              </div>
-            </div>
+        {isGenerating && episode.shots.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full py-20 text-center text-gray-400">
+            <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+            <p className="font-bold">正在执行第一阶段原子化拆解...</p>
           </div>
         )}
 
-        {!isGenerating && episode.shots.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-center py-24">
-            <div className="w-32 h-32 bg-[#141414] rounded-[2.5rem] flex items-center justify-center mb-8 border border-white/5 shadow-2xl">
-              <svg className="w-14 h-14 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-              </svg>
-            </div>
-            <h3 className="text-2xl font-black text-white mb-3">分镜序列未初始化</h3>
-            <p className="text-gray-500 max-w-sm mx-auto text-sm leading-relaxed">
-              点击上方按钮开始生成。系统将锁定 1:1 台词，通过“动作原子化”和“系统特效化”确保生成 60 个以上的高密度镜头。
-            </p>
+        {episode.shots.length === 0 && !isGenerating && (
+          <div className="text-center py-24 text-gray-600">
+            <p>暂无镜头，请点击上方按钮开始生成第一批次 (1-20镜)</p>
           </div>
         )}
 
-        {!isGenerating && episode.shots.length > 0 && (
-          <div className="grid grid-cols-1 gap-10 max-w-6xl mx-auto pb-20">
+        {episode.shots.length > 0 && (
+          <div className="grid grid-cols-1 gap-10 max-w-6xl mx-auto pb-10">
             {episode.shots.map((shot, idx) => (
               <div key={idx} className="bg-[#141414] rounded-3xl border border-white/5 overflow-hidden flex flex-col lg:flex-row transition-all hover:border-blue-500/30 group shadow-2xl relative">
-                <div className="w-full lg:w-80 bg-black p-6 border-r border-white/5 relative aspect-video lg:aspect-square flex flex-col items-center justify-center overflow-hidden">
-                  <div className="absolute top-4 left-4 bg-blue-600 text-[10px] font-black px-3 py-1 rounded-full z-10 shadow-lg tracking-widest uppercase">
+                <div className="w-full lg:w-80 bg-black p-6 border-r border-white/5 relative aspect-video lg:aspect-square flex flex-col items-center justify-center">
+                  <div className="absolute top-4 left-4 bg-blue-600 text-[10px] font-black px-3 py-1 rounded-full z-10">
                     镜 #{shot.shotNumber}
                   </div>
-                  <div className="absolute top-4 right-4 bg-white/5 text-[10px] px-3 py-1 rounded-lg backdrop-blur-xl border border-white/10 font-black text-gray-400">
-                    {shot.duration}
-                  </div>
                   
-                  <div className="text-center relative z-10">
-                    <div className="text-blue-500 text-xl font-black tracking-tighter mb-1 uppercase group-hover:scale-110 transition-transform duration-500">{shot.shotType}</div>
-                    <div className="text-gray-500 text-[10px] font-black tracking-widest border-t border-white/5 pt-2 mt-1 uppercase">{shot.movement}</div>
+                  {/* 单镜重刷按钮 */}
+                  <button 
+                    onClick={() => handleRegenerateShot(idx)}
+                    className="absolute top-4 right-4 p-2 bg-white/5 hover:bg-blue-600 text-white rounded-lg transition-colors border border-white/10 group-hover:opacity-100 opacity-0"
+                    title="重新生成此镜"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </button>
+
+                  <div className="text-center">
+                    <div className="text-blue-500 text-xl font-black">{shot.shotType}</div>
+                    <div className="text-gray-500 text-[10px] font-black border-t border-white/5 pt-2 mt-1 uppercase">{shot.movement}</div>
                   </div>
                 </div>
                 
@@ -223,39 +222,47 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
                     <div>
                       <h4 className="text-[10px] uppercase tracking-[0.2em] text-gray-600 font-black mb-2 flex items-center">
                         <span className="w-1.5 h-1.5 bg-blue-500 rounded-full mr-2"></span>
-                        视觉描述 (原子化拆解)
+                        视觉描述
                       </h4>
                       <p className="text-base text-gray-200 leading-relaxed font-bold">{shot.visualDescription}</p>
                     </div>
                     
                     {shot.dialogue && (
                       <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
-                        <h4 className="text-[10px] uppercase tracking-[0.2em] text-blue-500 font-black mb-1">1:1 原著台词</h4>
                         <p className="text-sm text-white font-medium italic">“{shot.dialogue}”</p>
                       </div>
                     )}
                   </div>
 
                   <div>
-                    <h4 className="text-[10px] uppercase tracking-[0.2em] text-indigo-400 font-black mb-2">Vidu 一致性视听提示词</h4>
-                    <div className="bg-indigo-500/5 p-4 rounded-2xl border border-indigo-500/10 group-hover:border-indigo-500/30 transition-all relative">
-                      <p className="text-xs text-indigo-300/80 font-mono leading-relaxed select-all">
+                    <h4 className="text-[10px] uppercase tracking-[0.2em] text-indigo-400 font-black mb-2">Vidu 提示词</h4>
+                    <div className="bg-indigo-500/5 p-4 rounded-2xl border border-indigo-500/10 relative">
+                      <p className="text-xs text-indigo-300/80 font-mono select-all pr-10">
                         {shot.viduPrompt}
                       </p>
-                      <button 
-                        onClick={() => navigator.clipboard.writeText(shot.viduPrompt)}
-                        className="absolute right-3 top-3 p-2 text-indigo-400 opacity-0 group-hover:opacity-100 transition-all hover:text-white bg-[#0a0a0a] rounded-xl border border-white/10"
-                        title="点击复制"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                        </svg>
-                      </button>
                     </div>
                   </div>
                 </div>
               </div>
             ))}
+
+            {/* 继续生成按钮 */}
+            {currentBatch < 2 && !isGenerating && (
+              <div className="flex justify-center py-10">
+                <button
+                  onClick={handleContinue}
+                  className="px-10 py-5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-2xl font-black text-lg shadow-2xl shadow-blue-900/40 transition-all hover:scale-105"
+                >
+                  满意，继续生成后续 20 个镜头 (第 {currentBatch + 2} 阶段)
+                </button>
+              </div>
+            )}
+            
+            {isGenerating && currentBatch < 2 && (
+              <div className="flex justify-center py-10 text-gray-400 animate-pulse font-bold">
+                AI 正在努力拆解下一阶段动作中...
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -362,3 +362,56 @@ export async function generateStoryboard(
     throw err;
   }
 }
+/**
+ * 核心新增：单镜头重新生成逻辑
+ * 专门用于点击“🔄 重刷此镜”时调用
+ */
+export async function regenerateSingleShot(
+  episode: Episode,
+  kb: KBFile[],
+  shotToRegenerate: Shot,
+  previousShot?: Shot
+): Promise<Shot> {
+  const kbContext = kb.length > 0 
+    ? kb.map(f => `【参考文档：${f.name}】\n${f.content}`).join('\n')
+    : "（暂无特定知识库）";
+
+  // 构建专门针对这一镜的 Prompt，要求它更精准地优化
+  const userPrompt = `
+  你现在需要重新设计一个分镜。
+  
+  【上文参考】：${previousShot ? previousShot.visualDescription : "这是本片第一镜，无上文"}
+  【待优化分镜原内容】：${shotToRegenerate.visualDescription}
+  【待处理剧本片段】：${episode.script.slice(0, 1000)}...
+  
+  请基于以上信息，重新生成第 ${shotToRegenerate.shotNumber} 镜。要求：
+  1. 画面表现力更强，动作细节更丰富。
+  2. 必须严格保持与上文镜头的逻辑、位置、光影连贯。
+  3. 按照指定的 JSON 格式返回。
+  `;
+
+  const response = await openai.chat.completions.create({
+    model: "openai/gpt-5.2", 
+    messages: [
+      { role: "system", content: STORYBOARD_PROMPT + "\n请只返回一个包含该分镜信息的 JSON 对象，不要返回数组。" },
+      { role: "user", content: kbContext + "\n\n" + userPrompt }
+    ],
+    response_format: { type: "json_object" }
+  });
+
+  const rawText = response.choices[0].message.content || "";
+  const cleanJson = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
+  
+  try {
+    const parsed = JSON.parse(cleanJson);
+    // 处理 AI 可能返回的格式（有的 AI 会嵌套一层 "shot" 或 "shots"）
+    const newShotData = parsed.shot || (Array.isArray(parsed.shots) ? parsed.shots[0] : parsed);
+    
+    // 注入继承逻辑，确保动作连贯
+    return injectActionCarryover(newShotData, previousShot);
+  } catch (e) {
+    console.error("解析单镜头 JSON 失败:", e);
+    // 如果解析失败，返回原镜头防止报错
+    return shotToRegenerate;
+  }
+}

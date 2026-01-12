@@ -260,60 +260,107 @@ function injectActionCarryover(
 
   };
 }
-export async function generateStoryboard(
-  episode: Episode,
-  kb: KBFile[]
-): Promise<Shot[]> {
+/**
+ * 核心请求函数：负责单次生成 20 个镜头并清洗数据
+ */
+async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number) {
+  const response = await openai.chat.completions.create({
+    model: "openai/gpt-5.2", // 严格保留你的模型设定
+    messages: [
+      { role: "system", content: STORYBOARD_PROMPT },
+      { 
+        role: "user", 
+        content: `${kbContext}\n\n【批次任务】：你现在只负责生成总任务中的第 ${range} 个分镜，起始编号为 ${startNo}。\n【数量要求】：本批次必须精准拆解出 20 个高密度分镜。\n【当前剧本片段】：\n${scriptPart}\n\n请严格返回纯 JSON 格式：{"shots": [...]}` 
+      }
+    ],
+    response_format: { type: "json_object" }
+  });
 
-  const kbContext = kb.length > 0 
-    ? kb.map(f => `【参考文档：${f.name}】\n${f.content}\n-------------------`).join('\n')
-    : "（暂无特定知识库，请严格基于剧本原文分析）";
-
-  const userPrompt = `
-【最高优先级：原著世界观与上下文设定】
-${kbContext}
-
-=========================================
-【当前需要分镜的剧本片段】：
-${episode.script}
-=========================================
-
-请执行“时空拆解算法”生成【60个左右】分镜。
-`;
+  const rawText = response.choices[0].message.content || "";
+  
+  // 【关键修复】：清理 AI 可能返回的 Markdown 标签，防止解析崩溃
+  const cleanJson = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
 
   try {
-    // ① 调模型（你刚才漏掉的核心）
-    const response = await openai.chat.completions.create({
-      model: "openai/gpt-5.2",
-      messages: [
-        { role: "system", content: STORYBOARD_PROMPT },
-        { role: "user", content: userPrompt }
-      ],
-      response_format: { type: "json_object" }
-    });
+    const parsed = JSON.parse(cleanJson);
+    // 兼容多种可能的返回键名
+    return parsed.shots || parsed.s || (Array.isArray(parsed) ? parsed : []);
+  } catch (e) {
+    // 【容错】：如果 JSON 还是碎了，强行匹配出已生成的镜头对象
+    const matches = cleanJson.match(/\{"(shotNumber|n|s)":[\s\S]*?\}/g);
+    return matches ? matches.map(m => {
+        try { return JSON.parse(m.endsWith('}') ? m : m + '}'); } catch { return null; }
+    }).filter(Boolean) : [];
+  }
+}
 
-    // ② 取文本
-    const text = response.choices[0].message.content;
-    if (!text) throw new Error("AI 返回内容为空");
+/**
+ * 动作继承逻辑处理：保留并执行你的“未完成运动强制继承”规则
+ */
+function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
+  if (!prevShot) return currentShot;
+  
+  // 检查前一镜是否处于动作进行中（基于你 Prompt 里的 actionState 标签）
+  const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
+  
+  return {
+    shotNumber: currentShot.shotNumber || currentShot.n || 0,
+    duration: currentShot.duration || currentShot.d || "3s",
+    shotType: currentShot.shotType || currentShot.t || "中景",
+    movement: currentShot.movement || "固定镜头",
+    visualDescription: isOngoing 
+      ? `【未完成动作继承】${currentShot.visualDescription || currentShot.v}` 
+      : (currentShot.visualDescription || currentShot.v),
+    dialogue: currentShot.dialogue || "",
+    emotion: currentShot.emotion || "",
+    viduPrompt: isOngoing
+      ? `[Action Ongoing] ${currentShot.viduPrompt || currentShot.p}`
+      : (currentShot.viduPrompt || currentShot.p),
+    actionState: currentShot.actionState // 传回原有的状态标签
+  };
+}
 
-    // ③ 解析 JSON
-    const parsed = JSON.parse(text);
+/**
+ * 主函数：将 60 个镜头拆分为 20+20+20 并行生成
+ * 替换掉你原有的整个 export async function generateStoryboard
+ */
+export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promise<Shot[]> {
+  const kbContext = kb.length > 0 
+    ? kb.map(f => `【参考文档：${f.name}】\n${f.content}`).join('\n')
+    : "（暂无特定知识库）";
 
-    // ④ 统一抽取 shots
-    const shots: Shot[] = Array.isArray(parsed)
-      ? parsed
-      : (parsed.shots || parsed.items || Object.values(parsed)[0]);
+  try {
+    const script = episode.script;
+    const len = script.length;
+    
+    // 将剧本平分为三段，每段增加 200 字重叠区以保证剧情连贯
+    const p1 = script.substring(0, Math.floor(len / 3) + 200);
+    const p2 = script.substring(Math.floor(len / 3) - 200, Math.floor(len * 2 / 3) + 200);
+    const p3 = script.substring(Math.floor(len * 2 / 3) - 200);
 
-    // ⑤ 注入「未完成动作强制继承」
-    const enhancedShots = shots.map((shot, index) =>
-      injectActionCarryover(shot, shots[index - 1])
+    console.log("🚀 三引擎并行启动：20 + 20 + 20 = 60 个高密度分镜生成中...");
+
+    // 同时发送三个请求，极大减轻单个 AI 的思考压力，防止逻辑混乱
+    const [b1, b2, b3] = await Promise.all([
+      fetchShotsBatch(p1, kbContext, "1-20", 1),
+      fetchShotsBatch(p2, kbContext, "21-40", 21),
+      fetchShotsBatch(p3, kbContext, "41-60", 41)
+    ]);
+
+    const allRaw = [...b1, ...b2, ...b3];
+    
+    // 统一处理编号和动作继承逻辑
+    const finalShots = allRaw.map((shot, index) => 
+      injectActionCarryover(shot, allRaw[index - 1])
     );
 
-    // ⑥ 返回
-    return enhancedShots;
+    console.log(`✅ 成功合并生成 ${finalShots.length} 个分镜。`);
+    
+    // 按照 shotNumber 排序，确保顺序正确
+    return finalShots.sort((a, b) => a.shotNumber - b.shotNumber);
 
   } catch (err) {
-    console.error("生成分镜失败", err);
+    console.error("分镜生成过程出现致命错误:", err);
     throw err;
   }
 }

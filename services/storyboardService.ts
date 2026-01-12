@@ -297,7 +297,19 @@ function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
 /**
  * 主函数：将 60 个镜头拆分为 20+20+20 并行生成
  */
-export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promise<Shot[]> {
+/**
+ * 修改后的主函数：支持分段点击生成
+ * @param episode 剧本信息
+ * @param kb 知识库
+ * @param batchIndex 当前生成的批次 (0 代表 1-20镜, 1 代表 21-40镜, 2 代表 41-60镜)
+ * @param previousShots 之前已经生成好的镜头数组（用于维持动作连贯性）
+ */
+export async function generateStoryboard(
+  episode: Episode,
+  kb: KBFile[],
+  batchIndex: number = 0,
+  previousShots: Shot[] = []
+): Promise<Shot[]> {
   const kbContext = kb.length > 0 
     ? kb.map(f => `【参考文档：${f.name}】\n${f.content}`).join('\n')
     : "（暂无特定知识库）";
@@ -306,33 +318,47 @@ export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promis
     const script = episode.script;
     const len = script.length;
     
-    // 将剧本平分为三段，每段增加 200 字重叠区以保证剧情连贯
-    const p1 = script.substring(0, Math.floor(len / 3) + 200);
-    const p2 = script.substring(Math.floor(len / 3) - 200, Math.floor(len * 2 / 3) + 200);
-    const p3 = script.substring(Math.floor(len * 2 / 3) - 200);
+    // 定义三个分段的配置
+    const batchConfigs = [
+      { range: "1-20", start: 0, end: Math.floor(len / 3) + 200, startNo: 1 },
+      { range: "21-40", start: Math.floor(len / 3) - 200, end: Math.floor(len * 2 / 3) + 200, startNo: 21 },
+      { range: "41-60", start: Math.floor(len * 2 / 3) - 200, end: len, startNo: 41 }
+    ];
 
-    console.log("🚀 三引擎并行启动：20 + 20 + 20 = 60 个高密度分镜生成中...");
+    // 获取当前批次对应的剧本片段
+    const config = batchConfigs[batchIndex] || batchConfigs[0];
+    const currentScriptPart = script.substring(config.start, config.end);
 
-    // 同时发送三个请求
-    const [b1, b2, b3] = await Promise.all([
-      fetchShotsBatch(p1, kbContext, "1-20", 1),
-      fetchShotsBatch(p2, kbContext, "21-40", 21),
-      fetchShotsBatch(p3, kbContext, "41-60", 41)
-    ]);
+    // 如果有前文镜头，提取最后一个镜头的视觉特征作为强提醒，防止断层
+    const lastShotContext = previousShots.length > 0 
+      ? `\n\n【上文衔接提醒】：上一镜（第${previousShots.length}镜）视觉内容为：${previousShots[previousShots.length - 1].visualDescription}。请确保本批次第一镜逻辑连贯。`
+      : "";
 
-    const allRaw = [...b1, ...b2, ...b3];
-    
-    // 统一处理编号和动作继承逻辑
-    const finalShots = allRaw.map((shot, index) => 
-      injectActionCarryover(shot, allRaw[index - 1])
+    console.log(`🚀 正在生成第 ${batchIndex + 1} 阶段分镜 (${config.range})...`);
+
+    // 只请求当前这 20 个镜头
+    const newRawShots = await fetchShotsBatch(
+      currentScriptPart + lastShotContext, 
+      kbContext, 
+      config.range, 
+      config.startNo
     );
 
-    console.log(`✅ 成功合并生成 ${finalShots.length} 个分镜。`);
+    // 处理这一批镜头的内部继承逻辑
+    const processedNewShots = newRawShots.map((shot: any, index: number) => {
+      // 每一批的第一镜要和上一批的最后一镜比对；其余镜和本批次前一镜比对
+      const prev = (index === 0 && previousShots.length > 0) 
+        ? previousShots[previousShots.length - 1] 
+        : newRawShots[index - 1];
+      return injectActionCarryover(shot, prev);
+    });
+
+    console.log(`✅ 第 ${batchIndex + 1} 阶段生成完成，获得 ${processedNewShots.length} 个镜头。`);
     
-    return finalShots.sort((a, b) => a.shotNumber - b.shotNumber);
+    return processedNewShots;
 
   } catch (err) {
-    console.error("分镜生成过程出现致命错误:", err);
+    console.error(`第 ${batchIndex} 阶段生成失败:`, err);
     throw err;
   }
 }

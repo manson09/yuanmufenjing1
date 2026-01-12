@@ -5,7 +5,7 @@ import { Episode, KBFile, Shot } from "../types";
 const openai = new OpenAI({
   apiKey: import.meta.env.VITE_OPENAI_API_KEY, 
   baseURL: import.meta.env.VITE_BASE_URL || "https://openrouter.ai/api/v1",
-  dangerouslyAllowBrowser: true, // 解决浏览器报错的关键
+  dangerouslyAllowBrowser: true, 
   defaultHeaders: {
     "HTTP-Referer": "https://yuanmufenjing1.pages.dev",
     "X-Title": "ViduAnime Master",
@@ -228,38 +228,7 @@ resolved：动作已完成并产生明确结果
 请返回符合以下格式的 JSON 数组（Array of Objects），字段包含：shotNumber(int), duration(string), shotType(string), movement(string), visualDescription(string), dialogue(string), emotion(string), viduPrompt(string)。
 确保数组长度不少于 60。
 `;
-function injectActionCarryover(
-  currentShot: Shot,
-  prevShot?: Shot
-): Shot {
-  if (!prevShot) return currentShot;
 
-  if (
-    prevShot.actionState !== "start" &&
-    prevShot.actionState !== "ongoing"
-  ) {
-    return currentShot;
-  }
-
-  const coreAction =
-    prevShot.coreAction ||
-    prevShot.visualDescription?.slice(0, 30) ||
-    "上一镜头未完成的关键动作";
-
-  return {
-    ...currentShot,
-    visualDescription:
-      `【动作继承】承接上一镜头未完成的动作：${coreAction}。\n` +
-      (currentShot.visualDescription || ""),
-    viduPrompt:
-  `【未完成动作继承】
-  上一镜头中已启动但尚未接触的动作在本镜头开始时仍在进行中：
-  该动作的当前物理状态为【仍处于空中｜尚未接触目标｜正在接近目标】。
-  请以“动作仍未发生接触”为前提继续描写。\n` +
-  (currentShot.viduPrompt || "")
-
-  };
-}
 /**
  * 核心请求函数：负责单次生成 20 个镜头并清洗数据
  */
@@ -303,26 +272,30 @@ function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
   // 检查前一镜是否处于动作进行中（基于你 Prompt 里的 actionState 标签）
   const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
   
+  const coreAction =
+    prevShot.coreAction ||
+    prevShot.visualDescription?.slice(0, 30) ||
+    "上一镜头未完成的关键动作";
+
   return {
     shotNumber: currentShot.shotNumber || currentShot.n || 0,
     duration: currentShot.duration || currentShot.d || "3s",
     shotType: currentShot.shotType || currentShot.t || "中景",
     movement: currentShot.movement || "固定镜头",
     visualDescription: isOngoing 
-      ? `【未完成动作继承】${currentShot.visualDescription || currentShot.v}` 
+      ? `【动作继承】承接上一镜头未完成的动作：${coreAction}。\n${currentShot.visualDescription || currentShot.v}` 
       : (currentShot.visualDescription || currentShot.v),
     dialogue: currentShot.dialogue || "",
     emotion: currentShot.emotion || "",
     viduPrompt: isOngoing
-      ? `[Action Ongoing] ${currentShot.viduPrompt || currentShot.p}`
+      ? `【未完成动作继承】上一镜头动作在本镜头继续：${currentShot.viduPrompt || currentShot.p}`
       : (currentShot.viduPrompt || currentShot.p),
-    actionState: currentShot.actionState // 传回原有的状态标签
+    actionState: currentShot.actionState 
   };
 }
 
 /**
  * 主函数：将 60 个镜头拆分为 20+20+20 并行生成
- * 替换掉你原有的整个 export async function generateStoryboard
  */
 export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promise<Shot[]> {
   const kbContext = kb.length > 0 
@@ -340,7 +313,7 @@ export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promis
 
     console.log("🚀 三引擎并行启动：20 + 20 + 20 = 60 个高密度分镜生成中...");
 
-    // 同时发送三个请求，极大减轻单个 AI 的思考压力，防止逻辑混乱
+    // 同时发送三个请求
     const [b1, b2, b3] = await Promise.all([
       fetchShotsBatch(p1, kbContext, "1-20", 1),
       fetchShotsBatch(p2, kbContext, "21-40", 21),
@@ -356,7 +329,6 @@ export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promis
 
     console.log(`✅ 成功合并生成 ${finalShots.length} 个分镜。`);
     
-    // 按照 shotNumber 排序，确保顺序正确
     return finalShots.sort((a, b) => a.shotNumber - b.shotNumber);
 
   } catch (err) {

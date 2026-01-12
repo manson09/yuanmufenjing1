@@ -16,6 +16,7 @@ const STORYBOARD_PROMPT = `
 你是一位世界顶级的动漫爽剧分镜导演、动作指导（武指）和 AI 视频提示词专家。
 你的核心任务是将剧本扩展为具备极高信息量、视觉密度极大的爽剧分镜脚本，确保单集时长超过 2 分钟，且镜头数量【必须在 60 个左右】。
 
+
 --------------------------------
 导演演绎区（受限创作）
 
@@ -174,42 +175,88 @@ resolved：动作已完成并产生明确结果
 请返回符合以下格式的 JSON 数组（Array of Objects），字段包含：shotNumber(int), duration(string), shotType(string), movement(string), visualDescription(string), dialogue(string), emotion(string), viduPrompt(string)。
 确保数组长度不少于 60。
 `;
+function injectActionCarryover(
+  currentShot: Shot,
+  prevShot?: Shot
+): Shot {
+  if (!prevShot) return currentShot;
 
-export async function generateStoryboard(episode: Episode, kb: KBFile[]): Promise<Shot[]> {
+  if (
+    prevShot.actionState !== "start" &&
+    prevShot.actionState !== "ongoing"
+  ) {
+    return currentShot;
+  }
+
+  const coreAction =
+    prevShot.coreAction ||
+    prevShot.visualDescription?.slice(0, 30) ||
+    "上一镜头未完成的关键动作";
+
+  return {
+    ...currentShot,
+    visualDescription:
+      `【动作继承】承接上一镜头未完成的动作：${coreAction}。\n` +
+      (currentShot.visualDescription || ""),
+    viduPrompt:
+      `承接上一镜头未完成的动作：${coreAction}，该动作在本镜头开始时仍处于进行中。\n` +
+      (currentShot.viduPrompt || "")
+  };
+}
+export async function generateStoryboard(
+  episode: Episode,
+  kb: KBFile[]
+): Promise<Shot[]> {
+
   const kbContext = kb.length > 0 
     ? kb.map(f => `【参考文档：${f.name}】\n${f.content}\n-------------------`).join('\n')
     : "（暂无特定知识库，请严格基于剧本原文分析）";
-  
+
   const userPrompt = `
-  【最高优先级：原著世界观与上下文设定】
-  ${kbContext}
+【最高优先级：原著世界观与上下文设定】
+${kbContext}
 
-  =========================================
-  【当前需要分镜的剧本片段】：
-  ${episode.script}
-  =========================================
+=========================================
+【当前需要分镜的剧本片段】：
+${episode.script}
+=========================================
 
-  请执行“时空拆解算法”生成【60个左右】分镜。
-  `;
+请执行“时空拆解算法”生成【60个左右】分镜。
+`;
 
   try {
+    // ① 调模型（你刚才漏掉的核心）
     const response = await openai.chat.completions.create({
       model: "openai/gpt-5.2",
       messages: [
         { role: "system", content: STORYBOARD_PROMPT },
         { role: "user", content: userPrompt }
       ],
-      response_format: { type: "json_object" } 
+      response_format: { type: "json_object" }
     });
 
+    // ② 取文本
     const text = response.choices[0].message.content;
     if (!text) throw new Error("AI 返回内容为空");
-    
-    // 兼容不同的返回包裹格式
+
+    // ③ 解析 JSON
     const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed : (parsed.shots || parsed.items || Object.values(parsed)[0]);
-  } catch (error) {
-    console.error("分镜生成失败:", error);
-    throw error;
+
+    // ④ 统一抽取 shots
+    const shots: Shot[] = Array.isArray(parsed)
+      ? parsed
+      : (parsed.shots || parsed.items || Object.values(parsed)[0]);
+
+    // ⑤ 注入「未完成动作强制继承」
+    const enhancedShots = shots.map((shot, index) =>
+      injectActionCarryover(shot, shots[index - 1])
+    );
+
+    // ⑥ 返回
+    return enhancedShots;
+
+  } catch (err) {
+    console.error("生成分镜失败", err);
+    throw err;
   }
 }

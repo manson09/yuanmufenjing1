@@ -32,3 +32,10 @@ export interface AppState {
   episodes: Episode[];
   currentEpisodeId: string | null;
 }
+export interface Project {
+  id: string;
+  name: string;               
+  knowledgeBase: KBFile[];   
+  episodes: Episode[];        
+  lastModified: number;       
+}

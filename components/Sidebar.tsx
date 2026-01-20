@@ -1,9 +1,9 @@
-
 import React from 'react';
 
 interface SidebarProps {
-  activeTab: 'kb' | 'episodes' | 'editor';
-  setActiveTab: (tab: 'kb' | 'episodes' | 'editor') => void;
+  // 💡 第一处修改：加入 'hub' 类型
+  activeTab: 'hub' | 'kb' | 'episodes' | 'editor';
+  setActiveTab: (tab: 'hub' | 'kb' | 'episodes' | 'editor') => void;
   episodeCount: number;
 }
 
@@ -18,6 +18,19 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, episodeCount
       </div>
       
       <nav className="flex-1 p-4 space-y-2">
+        {/* 💡 第二处修改：在此处插入“切换作品”按钮 */}
+        <button
+          onClick={() => setActiveTab('hub')}
+          className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all mb-4 border border-white/5 bg-white/5 hover:bg-white/10 text-gray-300 group"
+        >
+          <svg className="w-5 h-5 text-blue-500 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+          </svg>
+          <span className="font-bold text-sm">切换/管理作品</span>
+        </button>
+
+        <div className="h-px bg-white/5 mx-2 mb-4"></div> {/* 分割线 */}
+
         <button
           onClick={() => setActiveTab('kb')}
           className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all ${

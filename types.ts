@@ -1,4 +1,3 @@
-export type Mode = '男频' | '女频';
 export type ScriptStyle = '情绪流' | '非情绪流';
 export interface KBFile {
   id: string;
@@ -26,7 +25,6 @@ export interface Episode {
   status: 'draft' | 'generating' | 'completed';
   shots: Shot[];
   createdAt: number;
-  style?: ScriptStyle;
 }
 
 export interface AppState {
@@ -40,5 +38,4 @@ export interface Project {
   knowledgeBase: KBFile[];   
   episodes: Episode[];        
   lastModified: number; 
-  mode: Mode;
 }

@@ -272,7 +272,7 @@ resolved：动作已完成并产生明确结果
 /**
  * 核心请求函数：负责单次生成 20 个镜头并清洗数据
  */
-async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number, count: number，systemPrompt: string) {
+async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number, count: number, systemPrompt: string) {
   const response = await openai.chat.completions.create({
     model: "openai/gpt-5.2", 
     messages: [

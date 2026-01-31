@@ -89,14 +89,14 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
             <h2 className="text-xl font-bold text-white flex items-center">
               {episode.title}
               {episode.shots.length > 0 && (
-                <span className="ml-3 px-2 py-0.5 bg-indigo-600/20 text-indigo-400 text-[10px] rounded uppercase border border-indigo-600/30 font-black">
-                  分布式生成模式
-                </span>
-              )}
-            </h2>
-            <div className="flex items-center space-x-4 mt-1">
-              <span className="text-xs text-gray-500 font-bold">已生成镜头：{episode.shots.length} / 50</span>
-            </div>
+  <span className="ml-3 px-2 py-0.5 bg-indigo-600/20 text-indigo-400 text-[10px] rounded uppercase border border-indigo-600/30 font-black">
+    50-60 镜深度拆解模式
+  </span>
+)}
+</h2>
+<div className="flex items-center space-x-4 mt-1">
+  <span className="text-xs text-gray-500 font-bold">创作进度：{episode.shots.length} 镜 (目标 50-60 镜)</span>
+</div>
           </div>
         </div>
 

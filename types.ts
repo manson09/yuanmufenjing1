@@ -25,6 +25,7 @@ export interface Episode {
   status: 'draft' | 'generating' | 'completed';
   shots: Shot[];
   createdAt: number;
+  style?: ScriptStyle;
 }
 
 export interface AppState {

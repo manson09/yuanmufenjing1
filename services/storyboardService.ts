@@ -27,7 +27,7 @@ const STYLE_PROMPTS = {
 
 const STORYBOARD_PROMPT = `
 你是一位世界顶级的动漫爽剧分镜导演、动作指导（武指）和 AI 视频提示词专家，同时还是顶级剪辑大师，极其擅长爽剧节奏把控。
-你的核心任务是将剧本扩展为具备极高信息量、视觉密度极大的爽剧分镜脚本，且镜头数量【必须在 50 个左右】。
+你的核心任务是将剧本扩展为具备极高信息量、视觉密度极大的爽剧分镜脚本，且镜头数量【必须在 50 到 60 个之间】】。
 
 
 --------------------------------
@@ -342,15 +342,21 @@ const dynamicPrompt = `${STORYBOARD_PROMPT}\n\n${STYLE_PROMPTS[style]}`;
     const script = episode.script;
     const len = script.length;
     
-    // 【修改点】：调整配置，确保最后一组是 10 个，总数 50
     const batchConfigs = [
-      { range: "1-20",  start: 0,                          end: Math.floor(len / 2.5),        startNo: 1,  count: 20 },
-      { range: "21-40", start: Math.floor(len / 2.5) - 200, end: Math.floor(len / 1.25),       startNo: 21, count: 20 },
-      { range: "41-50", start: Math.floor(len / 1.25) - 200, end: len,                          startNo: 41, count: 10 }
+      { range: "1-20",  start: 0,                          end: Math.floor(len / 3) + 200,    startNo: 1,  count: 20 },
+      { range: "21-40", start: Math.floor(len / 3) - 200,  end: Math.floor(len * 2 / 3) + 200, startNo: 21, count: 20 },
+      // 第三段设为 41-60，但我们将 count 传为 20，并告诉 AI 可以根据剧情灵活收尾
+      { range: "41-60", start: Math.floor(len * 2 / 3) - 200, end: len,                          startNo: 41, count: 20 }
     ];
 
     const config = batchConfigs[batchIndex] || batchConfigs[0];
     const currentScriptPart = script.substring(config.start, config.end);
+
+    // 【新增逻辑】：如果是最后一个批次，加入“弹性指令”
+    let finalBatchInstruction = "";
+    if (batchIndex === 2) {
+      finalBatchInstruction = `\n\n【收尾阶段特别要求】：这是剧本的最后一部分。请确保完整覆盖所有对话和结局。你可以根据剩余剧情的丰富程度，灵活生成 10 到 20 个镜头。如果剧情结束了，请立即停止，总镜数在 50-60 之间即可。`;
+    }
 
     const lastShotContext = previousShots.length > 0 
       ? `\n\n【上文衔接提醒】：上一镜（第${previousShots.length}镜）视觉内容为：${previousShots[previousShots.length - 1].visualDescription}。请确保本批次第一镜逻辑连贯。`

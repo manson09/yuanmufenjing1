@@ -11,6 +11,19 @@ const openai = new OpenAI({
     "X-Title": "ViduAnime Master",
   }
 });
+const STYLE_PROMPTS = {
+  '情绪流': `
+【当前执行风格：情绪流（极致冲突型）】
+- 镜头偏好：大幅增加角色面部特写、眼神细节、颤抖的肢体。
+- 节奏控制：在冲突爆发前，通过极细碎的慢镜头（如汗水滴落、瞳孔收缩）拉长紧张感。
+- 视觉重点：强调光影的反差、角色的压迫感、以及环境对人物情绪的烘托（如风卷残云、雷电交加）。`,
+  
+  '非情绪流': `
+【当前执行风格：非情绪流（诙谐脑洞型）】
+- 镜头偏好：增加中景和远景以展示环境互动，利用有趣的运镜（如快速推拉、摇拍）制造节奏感。
+- 节奏控制：强调动作的连贯性和反转，不需要过多的内心戏。
+- 视觉重点：强调物理反馈的趣味性、夸张的动作曲线、以及隐藏在背景里的热梗或细节。`
+};
 
 const STORYBOARD_PROMPT = `
 你是一位世界顶级的动漫爽剧分镜导演、动作指导（武指）和 AI 视频提示词专家，同时还是顶级剪辑大师，极其擅长爽剧节奏把控。
@@ -259,7 +272,7 @@ resolved：动作已完成并产生明确结果
 /**
  * 核心请求函数：负责单次生成 20 个镜头并清洗数据
  */
-async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number, count: number) {
+async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number, count: number，systemPrompt: string) {
   const response = await openai.chat.completions.create({
     model: "openai/gpt-5.2", 
     messages: [
@@ -322,8 +335,10 @@ export async function generateStoryboard(
   episode: Episode,
   kb: KBFile[],
   batchIndex: number = 0,
-  previousShots: Shot[] = []
+  previousShots: Shot[] = ]，
+  style: ScriptStyle = '情绪流'
 ): Promise<Shot[]> {
+const dynamicPrompt = `${STORYBOARD_PROMPT}\n\n${STYLE_PROMPTS[style]}`;
   const kbContext = kb.length > 0 
     ? kb.map(f => `【参考文档：${f.name}】\n${f.content}`).join('\n')
     : "（暂无特定知识库）";

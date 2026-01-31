@@ -72,7 +72,69 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
 
   // 导出 Word 逻辑保持不变...
   const exportToWord = () => {
-    // ... 你的导出代码 ...
+    if (!episode.shots || episode.shots.length === 0) {
+      alert("没有可导出的分镜数据");
+      return;
+    }
+
+    const tableRows = episode.shots.map(s => `
+      <tr style="background-color: ${s.shotNumber % 2 === 0 ? '#f9f9f9' : '#ffffff'};">
+        <td style="border: 1px solid #dddddd; padding: 10px; text-align: center; font-weight: bold; font-size: 10pt;">${s.shotNumber}</td>
+        <td style="border: 1px solid #dddddd; padding: 10px; text-align: center; font-size: 10pt;">${s.duration || '3s'}</td>
+        <td style="border: 1px solid #dddddd; padding: 10px; color: #2563eb; font-weight: bold; font-size: 10pt;">${s.shotType} / ${s.movement}</td>
+        <td style="border: 1px solid #dddddd; padding: 10px; font-size: 10.5pt; line-height: 1.5;">${s.visualDescription}</td>
+        <td style="border: 1px solid #dddddd; padding: 10px; font-style: italic; color: #4b5563; font-size: 10pt;">${s.dialogue || '-'}</td>
+        <td style="border: 1px solid #dddddd; padding: 10px; font-size: 9pt; font-family: 'Courier New', monospace; color: #4f46e5; background-color: #f5f7ff;">${s.viduPrompt}</td>
+      </tr>
+    `).join('');
+
+    const htmlContent = `
+      <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+      <head>
+        <meta charset="utf-8">
+        <title>专业分镜表 - ${episode.title}</title>
+        <style>
+          body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; padding: 20px; }
+          table { border-collapse: collapse; width: 100%; border: 1px solid #333; }
+          th { background-color: #1e293b; color: #ffffff; border: 1px solid #333; padding: 12px; text-align: center; font-size: 11pt; }
+          .header { text-align: center; margin-bottom: 20px; border-bottom: 3px solid #1e293b; padding-bottom: 10px; }
+          .title { font-size: 22pt; font-weight: bold; color: #1e293b; margin: 0; }
+          .meta { margin-top: 10px; font-size: 10pt; color: #64748b; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <p class="title">专业动画分镜脚本 (Vidu 深度拆解版)</p>
+          <div class="meta">剧本标题：${episode.title} | 导出时间：${new Date().toLocaleString()} | 镜头总数：${episode.shots.length}</div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 6%;">镜号</th>
+              <th style="width: 6%;">时长</th>
+              <th style="width: 13%;">视听语言</th>
+              <th style="width: 28%;">画面视觉描述</th>
+              <th style="width: 15%;">原著台词/OS</th>
+              <th style="width: 32%;">Vidu 提示词</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows}
+          </tbody>
+        </table>
+      </body>
+      </html>
+    `;
+
+    const blob = new Blob(['\ufeff', htmlContent], { type: 'application/msword' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${episode.title}_专业分镜脚本.doc`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   return (

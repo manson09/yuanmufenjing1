@@ -335,7 +335,7 @@ export async function generateStoryboard(
   episode: Episode,
   kb: KBFile[],
   batchIndex: number = 0,
-  previousShots: Shot[] = ]，
+  previousShots: Shot[] = [], 
   style: ScriptStyle = '情绪流'
 ): Promise<Shot[]> {
 const dynamicPrompt = `${STORYBOARD_PROMPT}\n\n${STYLE_PROMPTS[style]}`;

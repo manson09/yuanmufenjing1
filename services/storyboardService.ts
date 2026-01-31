@@ -259,30 +259,28 @@ resolved：动作已完成并产生明确结果
 /**
  * 核心请求函数：负责单次生成 20 个镜头并清洗数据
  */
-async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number) {
+async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number, count: number) {
   const response = await openai.chat.completions.create({
-    model: "openai/gpt-5.2", // 严格保留你的模型设定
+    model: "openai/gpt-5.2", 
     messages: [
       { role: "system", content: STORYBOARD_PROMPT },
       { 
         role: "user", 
-        content: `${kbContext}\n\n【批次任务】：你现在只负责生成总任务中的第 ${range} 个分镜，起始编号为 ${startNo}。\n【数量要求】：本批次必须精准拆解出 20 个高密度分镜。\n【当前剧本片段】：\n${scriptPart}\n\n请严格返回纯 JSON 格式：{"shots": [...]}` 
+        // 【修改点】：将硬编码的 20 改为动态的 ${count}
+        content: `${kbContext}\n\n【批次任务】：你现在只负责生成总任务中的第 ${range} 个分镜，起始编号为 ${startNo}。\n【数量要求】：本批次必须精准拆解出 ${count} 个高密度分镜。\n【当前剧本片段】：\n${scriptPart}\n\n请严格返回纯 JSON 格式：{"shots": [...]}` 
       }
     ],
     response_format: { type: "json_object" }
   });
 
+  // ... 后续清理逻辑保持不变
   const rawText = response.choices[0].message.content || "";
-  
-  // 【关键修复】：清理 AI 可能返回的 Markdown 标签，防止解析崩溃
   const cleanJson = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
 
   try {
     const parsed = JSON.parse(cleanJson);
-    // 兼容多种可能的返回键名
     return parsed.shots || parsed.s || (Array.isArray(parsed) ? parsed : []);
   } catch (e) {
-    // 【容错】：如果 JSON 还是碎了，强行匹配出已生成的镜头对象
     const matches = cleanJson.match(/\{"(shotNumber|n|s)":[\s\S]*?\}/g);
     return matches ? matches.map(m => {
         try { return JSON.parse(m.endsWith('}') ? m : m + '}'); } catch { return null; }
@@ -290,9 +288,7 @@ async function fetchShotsBatch(scriptPart: string, kbContext: string, range: str
   }
 }
 
-/**
- * 动作继承逻辑处理：保留并执行你的“未完成运动强制继承”规则
- */
+
 function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
   if (!prevShot) return currentShot;
   
@@ -321,16 +317,7 @@ function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
   };
 }
 
-/**
- * 主函数：将 60 个镜头拆分为 20+20+20 并行生成
- */
-/**
- * 修改后的主函数：支持分段点击生成
- * @param episode 剧本信息
- * @param kb 知识库
- * @param batchIndex 当前生成的批次 (0 代表 1-20镜, 1 代表 21-40镜, 2 代表 41-60镜)
- * @param previousShots 之前已经生成好的镜头数组（用于维持动作连贯性）
- */
+
 export async function generateStoryboard(
   episode: Episode,
   kb: KBFile[],
@@ -345,35 +332,32 @@ export async function generateStoryboard(
     const script = episode.script;
     const len = script.length;
     
-    // 定义三个分段的配置
+    // 【修改点】：调整配置，确保最后一组是 10 个，总数 50
     const batchConfigs = [
-      { range: "1-20", start: 0, end: Math.floor(len / 3) + 200, startNo: 1 },
-      { range: "21-40", start: Math.floor(len / 3) - 200, end: Math.floor(len * 2 / 3) + 200, startNo: 21 },
-      { range: "41-60", start: Math.floor(len * 2 / 3) - 200, end: len, startNo: 41 }
+      { range: "1-20",  start: 0,                          end: Math.floor(len / 2.5),        startNo: 1,  count: 20 },
+      { range: "21-40", start: Math.floor(len / 2.5) - 200, end: Math.floor(len / 1.25),       startNo: 21, count: 20 },
+      { range: "41-50", start: Math.floor(len / 1.25) - 200, end: len,                          startNo: 41, count: 10 }
     ];
 
-    // 获取当前批次对应的剧本片段
     const config = batchConfigs[batchIndex] || batchConfigs[0];
     const currentScriptPart = script.substring(config.start, config.end);
 
-    // 如果有前文镜头，提取最后一个镜头的视觉特征作为强提醒，防止断层
     const lastShotContext = previousShots.length > 0 
       ? `\n\n【上文衔接提醒】：上一镜（第${previousShots.length}镜）视觉内容为：${previousShots[previousShots.length - 1].visualDescription}。请确保本批次第一镜逻辑连贯。`
       : "";
 
     console.log(`🚀 正在生成第 ${batchIndex + 1} 阶段分镜 (${config.range})...`);
 
-    // 只请求当前这 20 个镜头
+    // 【修改点】：传入 config.count
     const newRawShots = await fetchShotsBatch(
       currentScriptPart + lastShotContext, 
       kbContext, 
       config.range, 
-      config.startNo
+      config.startNo,
+      config.count 
     );
 
-    // 处理这一批镜头的内部继承逻辑
     const processedNewShots = newRawShots.map((shot: any, index: number) => {
-      // 每一批的第一镜要和上一批的最后一镜比对；其余镜和本批次前一镜比对
       const prev = (index === 0 && previousShots.length > 0) 
         ? previousShots[previousShots.length - 1] 
         : newRawShots[index - 1];

@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { Episode, KBFile, Shot } from "../types";
+import { Episode, KBFile, Shot, ScriptStyle } from "../types";
 
 // 初始化 OpenRouter 客户端
 const openai = new OpenAI({
@@ -11,6 +11,7 @@ const openai = new OpenAI({
     "X-Title": "ViduAnime Master",
   }
 });
+
 const STYLE_PROMPTS = {
   '情绪流': `
 【当前执行风格：情绪流（极致冲突型）】
@@ -311,23 +312,21 @@ resolved：动作已完成并产生明确结果
 `;
 
 /**
- * 核心请求函数：负责单次生成 20 个镜头并清洗数据
+ * 核心请求函数：负责单次生成镜头
  */
 async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number, count: number, systemPrompt: string) {
   const response = await openai.chat.completions.create({
     model: "openai/gpt-5.2", 
     messages: [
-      { role: "system", content: STORYBOARD_PROMPT },
+      { role: "system", content: systemPrompt },
       { 
         role: "user", 
-        // 【修改点】：将硬编码的 20 改为动态的 ${count}
         content: `${kbContext}\n\n【批次任务】：你现在只负责生成总任务中的第 ${range} 个分镜，起始编号为 ${startNo}。\n【数量要求】：本批次必须精准拆解出 ${count} 个高密度分镜。\n【当前剧本片段】：\n${scriptPart}\n\n请严格返回纯 JSON 格式：{"shots": [...]}` 
       }
     ],
     response_format: { type: "json_object" }
   });
 
-  // ... 后续清理逻辑保持不变
   const rawText = response.choices[0].message.content || "";
   const cleanJson = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
 
@@ -342,123 +341,114 @@ async function fetchShotsBatch(scriptPart: string, kbContext: string, range: str
   }
 }
 
-
 function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
   if (!prevShot) return currentShot;
   
-  // 检查前一镜是否处于动作进行中（基于你 Prompt 里的 actionState 标签）
   const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
-  
-  const coreAction =
-    prevShot.coreAction ||
-    prevShot.visualDescription?.slice(0, 30) ||
-    "上一镜头未完成的关键动作";
+  const coreAction = prevShot.visualDescription?.slice(0, 30) || "上一镜头未完成的关键动作";
 
   return {
-    shotNumber: currentShot.shotNumber || currentShot.n || 0,
-    duration: currentShot.duration || currentShot.d || "3s",
-    shotType: currentShot.shotType || currentShot.t || "中景",
+    shotNumber: currentShot.shotNumber || 0,
+    duration: currentShot.duration || "3s",
+    shotType: currentShot.shotType || "中景",
     movement: currentShot.movement || "固定镜头",
     visualDescription: isOngoing 
-      ? `【动作继承】承接上一镜头未完成的动作：${coreAction}。\n${currentShot.visualDescription || currentShot.v}` 
-      : (currentShot.visualDescription || currentShot.v),
+      ? `【动作继承】承接上一镜头未完成的动作：${coreAction}。\n${currentShot.visualDescription}` 
+      : currentShot.visualDescription,
     dialogue: currentShot.dialogue || "",
     emotion: currentShot.emotion || "",
     viduPrompt: isOngoing
-      ? `【未完成动作继承】上一镜头动作在本镜头继续：${currentShot.viduPrompt || currentShot.p}`
-      : (currentShot.viduPrompt || currentShot.p),
+      ? `【未完成动作继承】上一镜头动作在本镜头继续：${currentShot.viduPrompt}`
+      : currentShot.viduPrompt,
     actionState: currentShot.actionState 
   };
 }
 
-
+/**
+ * ✨ 修改后的核心导出函数：一次性生成整集分镜
+ */
 export async function generateStoryboard(
   episode: Episode,
   kb: KBFile[],
-  batchIndex: number = 0,
-  previousShots: Shot[] = [], 
   style: ScriptStyle = '情绪流'
 ): Promise<Shot[]> {
-const dynamicPrompt = `${STORYBOARD_PROMPT}\n\n${STYLE_PROMPTS[style]}`;
   const kbContext = kb.length > 0 
     ? kb.map(f => `【参考文档：${f.name}】\n${f.content}`).join('\n')
     : "（暂无特定知识库）";
 
+  const script = episode.script;
+  const len = script.length;
+  const systemPrompt = `${STORYBOARD_PROMPT}\n\n${STYLE_PROMPTS[style]}`;
+
+  // 定义三个阶段的配置，模拟之前的 batch 逻辑但自动运行
+  const batchConfigs = [
+    { range: "1-20",  start: 0,                          end: Math.floor(len / 3) + 200,    startNo: 1,  count: 20 },
+    { range: "21-40", start: Math.floor(len / 3) - 200,  end: Math.floor(len * 2 / 3) + 200, startNo: 21, count: 20 },
+    { range: "41-60", start: Math.floor(len * 2 / 3) - 200, end: len,                          startNo: 41, count: 20 }
+  ];
+
+  let allShots: Shot[] = [];
+
   try {
-    const script = episode.script;
-    const len = script.length;
-    
-    const batchConfigs = [
-      { range: "1-20",  start: 0,                          end: Math.floor(len / 3) + 200,    startNo: 1,  count: 20 },
-      { range: "21-40", start: Math.floor(len / 3) - 200,  end: Math.floor(len * 2 / 3) + 200, startNo: 21, count: 20 },
-      // 第三段设为 41-60，但我们将 count 传为 20，并告诉 AI 可以根据剧情灵活收尾
-      { range: "41-60", start: Math.floor(len * 2 / 3) - 200, end: len,                          startNo: 41, count: 20 }
-    ];
+    // 🤖 开始串行循环生成三个批次
+    for (let i = 0; i < batchConfigs.length; i++) {
+      const config = batchConfigs[i];
+      const currentScriptPart = script.substring(config.start, config.end);
 
-    const config = batchConfigs[batchIndex] || batchConfigs[0];
-    const currentScriptPart = script.substring(config.start, config.end);
-    
- let dynamicStrategy = "";
-    if (batchIndex === 0) {
-      // 第一阶段通常是开场和铺垫
-      dynamicStrategy = `
-\n【🎬 本阶段执行策略：叙事脱水】
-- 当前为剧本开端，请用最少的镜头（1-2镜）交代清楚环境和走位。
-- 严禁在平淡对话上浪费镜头，迅速推进到矛盾冲突点。
-- 将镜头预算节省下来，留给后续的高潮部分。`;
-    } else if (batchIndex === 1) {
-      // 第二阶段通常是冲突升级
-      dynamicStrategy = `
-\n【🎬 本阶段执行策略：节奏拉锯】
-- 开始增加情绪特写，通过眼神、肢体细节拉长紧张感。
-- 对即将爆发的动作进行“前摇”拆解，为最终高潮蓄势。`;
-    } else {
-      // 第三阶段通常是爽点爆发
-      dynamicStrategy = `
-\n【🎬 本阶段执行策略：视觉原子化拆解（极限爽感）】
-- 这是最终高潮！请开启“视觉奇观”模式。
-- 哪怕剧本只有一句话的动作，也要强制拆解出环境反馈、路人震惊、物理破坏等高密度奇观分镜。
-- 每一个动作都要有“起手-冲击-结算-定格”的完整视觉链条。`;
+      // 动态策略引导
+      let dynamicStrategy = "";
+      if (i === 0) {
+        dynamicStrategy = "\n【🎬 本阶段执行策略：叙事脱水】请用最少镜头交代走位，为后续高潮节省配额。";
+      } else if (i === 1) {
+        dynamicStrategy = "\n【🎬 本阶段执行策略：节奏拉锯】开始增加情绪特写，为爆发蓄势。";
+      } else {
+        dynamicStrategy = "\n【🎬 本阶段执行策略：视觉原子化拆解】高潮爆发！极致细节。";
+      }
+
+      // 衔接上文提示
+      const lastShotContext = allShots.length > 0 
+        ? `\n\n【上文衔接提醒】：上一镜（第${allShots.length}镜）视觉内容为：${allShots[allShots.length - 1].visualDescription}。请确保本批次第一镜逻辑连贯。`
+        : "";
+
+      // 结尾收尾指令
+      const finalBatchInstruction = (i === 2) 
+        ? `\n\n【收尾阶段特别要求】：这是剧本的最后一部分。请确保完整覆盖所有对话和结局。你可以根据剩余剧情的丰富程度，灵活生成 10 到 20 个镜头。如果剧情结束了，请立即停止，总镜数在 50-60 之间即可。`
+        : "";
+
+      console.log(`🚀 正在自动执行阶段 ${i + 1}/3 (${config.range})...`);
+
+      const newRawShots = await fetchShotsBatch(
+        currentScriptPart + dynamicStrategy + lastShotContext + finalBatchInstruction, 
+        kbContext, 
+        config.range, 
+        config.startNo,
+        config.count,
+        systemPrompt
+      );
+
+      // 处理动作继承逻辑
+      const processedBatch = newRawShots.map((shot: any, index: number) => {
+        const prev = (index === 0 && allShots.length > 0) 
+          ? allShots[allShots.length - 1] 
+          : newRawShots[index - 1];
+        return injectActionCarryover(shot, prev);
+      });
+
+      // 合并到总数组
+      allShots = [...allShots, ...processedBatch];
     }
 
-    let finalBatchInstruction = "";
-    if (batchIndex === 2) {
-      finalBatchInstruction = `\n\n【收尾阶段特别要求】：这是剧本的最后一部分。请确保完整覆盖所有对话和结局。你可以根据剩余剧情的丰富程度，灵活生成 10 到 20 个镜头。如果剧情结束了，请立即停止，总镜数在 50-60 之间即可。`;
-    }
-
-    const lastShotContext = previousShots.length > 0 
-      ? `\n\n【上文衔接提醒】：上一镜（第${previousShots.length}镜）视觉内容为：${previousShots[previousShots.length - 1].visualDescription}。请确保本批次第一镜逻辑连贯。`
-      : "";
-
-    console.log(`🚀 正在生成第 ${batchIndex + 1} 阶段分镜 (${config.range})...`);
-    // 【修改点】：传入 config.count
-    const newRawShots = await fetchShotsBatch(
-      currentScriptPart + dynamicStrategy + lastShotContext + finalBatchInstruction, 
-      kbContext, 
-      config.range, 
-      config.startNo,
-      config.count 
-    );
-
-    const processedNewShots = newRawShots.map((shot: any, index: number) => {
-      const prev = (index === 0 && previousShots.length > 0) 
-        ? previousShots[previousShots.length - 1] 
-        : newRawShots[index - 1];
-      return injectActionCarryover(shot, prev);
-    });
-
-    console.log(`✅ 第 ${batchIndex + 1} 阶段生成完成，获得 ${processedNewShots.length} 个镜头。`);
-    
-    return processedNewShots;
+    console.log(`✅ 整集生成完成，共获得 ${allShots.length} 个镜头。`);
+    return allShots;
 
   } catch (err) {
-    console.error(`第 ${batchIndex} 阶段生成失败:`, err);
+    console.error(`整集分镜生成失败:`, err);
     throw err;
   }
 }
+
 /**
  * 核心新增：单镜头重新生成逻辑
- * 专门用于点击“🔄 重刷此镜”时调用
  */
 export async function regenerateSingleShot(
   episode: Episode,
@@ -470,14 +460,11 @@ export async function regenerateSingleShot(
     ? kb.map(f => `【参考文档：${f.name}】\n${f.content}`).join('\n')
     : "（暂无特定知识库）";
 
-  // 构建专门针对这一镜的 Prompt，要求它更精准地优化
   const userPrompt = `
   你现在需要重新设计一个分镜。
-  
   【上文参考】：${previousShot ? previousShot.visualDescription : "这是本片第一镜，无上文"}
   【待优化分镜原内容】：${shotToRegenerate.visualDescription}
   【待处理剧本片段】：${episode.script.slice(0, 1000)}...
-  
   请基于以上信息，重新生成第 ${shotToRegenerate.shotNumber} 镜。要求：
   1. 画面表现力更强，动作细节更丰富。
   2. 必须严格保持与上文镜头的逻辑、位置、光影连贯。
@@ -498,14 +485,10 @@ export async function regenerateSingleShot(
   
   try {
     const parsed = JSON.parse(cleanJson);
-    // 处理 AI 可能返回的格式（有的 AI 会嵌套一层 "shot" 或 "shots"）
     const newShotData = parsed.shot || (Array.isArray(parsed.shots) ? parsed.shots[0] : parsed);
-    
-    // 注入继承逻辑，确保动作连贯
     return injectActionCarryover(newShotData, previousShot);
   } catch (e) {
     console.error("解析单镜头 JSON 失败:", e);
-    // 如果解析失败，返回原镜头防止报错
     return shotToRegenerate;
   }
 }

@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Episode, Shot, KBFile, ScriptStyle } from '../types'; // 确保导入了 ScriptStyle
+import React, { useState, useEffect } from 'react'; // ✨ 确保引入了 useEffect
+import { Episode, Shot, KBFile, ScriptStyle } from '../types';
 import { generateStoryboard, regenerateSingleShot } from '../services/storyboardService';
 
 interface StoryboardEditorProps {
@@ -14,17 +14,56 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentBatch, setCurrentBatch] = useState(0); 
-  const [selectedStyle, setSelectedStyle] = useState<ScriptStyle>('情绪流'); // 风格选择状态
+  const [selectedStyle, setSelectedStyle] = useState<ScriptStyle>('情绪流');
+
+  // ✨ 云端存储唯一 ID
+  const storageId = `storyboard_${episode.title}`;
+
+  // ✨ 新增：云端保存函数
+  const saveToCloud = async (shots: Shot[]) => {
+    try {
+      await fetch('/api/save-shots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: storageId, data: shots }),
+      });
+      console.log("☁️ 进度已同步至 Cloudflare KV");
+    } catch (err) {
+      console.error("存档失败:", err);
+    }
+  };
+
+  // ✨ 新增：页面加载时自动恢复进度
+  useEffect(() => {
+    const loadSavedWork = async () => {
+      if (episode.shots && episode.shots.length > 0) return;
+      try {
+        const response = await fetch(`/api/get-shots?id=${storageId}`);
+        const savedData = await response.json();
+        if (savedData && savedData.length > 0) {
+          onUpdate({ 
+            shots: savedData, 
+            status: savedData.length >= 50 ? 'completed' : 'generating' 
+          });
+          setCurrentBatch(Math.floor(savedData.length / 20) - 1);
+        }
+      } catch (e) {
+        console.log("云端暂无存档");
+      }
+    };
+    loadSavedWork();
+  }, [episode.title, storageId, onUpdate]);
 
   // 1. 初始生成逻辑
   const handleGenerate = async () => {
     setIsGenerating(true);
     setError(null);
     try {
-      // 传入选中的风格 selectedStyle
       const shots = await generateStoryboard(episode, kb, 0, [], selectedStyle);
       onUpdate({ shots, status: 'generating' });
       setCurrentBatch(0);
+      // ✨ 自动保存
+      await saveToCloud(shots);
     } catch (err) {
       setError('生成失败。请检查 API 配置或网络。');
       console.error(err);
@@ -39,13 +78,15 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
     setError(null);
     try {
       const nextBatch = currentBatch + 1;
-      // 传入选中的风格 selectedStyle
       const moreShots = await generateStoryboard(episode, kb, nextBatch, episode.shots, selectedStyle);
+      const updatedShots = [...episode.shots, ...moreShots];
       onUpdate({ 
-        shots: [...episode.shots, ...moreShots], 
+        shots: updatedShots, 
         status: nextBatch === 2 ? 'completed' : 'generating' 
       });
       setCurrentBatch(nextBatch);
+      // ✨ 自动保存
+      await saveToCloud(updatedShots);
     } catch (err) {
       setError('追加生成失败，请重试。');
       console.error(err);
@@ -58,19 +99,19 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
   const handleRegenerateShot = async (index: number) => {
     const target = episode.shots[index];
     const prev = index > 0 ? episode.shots[index - 1] : undefined;
-    
     try {
-      // 如果你的 regenerateSingleShot 也支持风格，可以在这里传入
       const newShot = await regenerateSingleShot(episode, kb, target, prev);
       const updatedShots = [...episode.shots];
       updatedShots[index] = newShot;
       onUpdate({ shots: updatedShots });
+      // ✨ 自动保存
+      await saveToCloud(updatedShots);
     } catch (err) {
       alert('重刷该镜头失败');
     }
   };
 
-  // 导出 Word 逻辑保持不变...
+  // 4. 导出 Word 逻辑（完整保留）
   const exportToWord = () => {
     if (!episode.shots || episode.shots.length === 0) {
       alert("没有可导出的分镜数据");
@@ -139,7 +180,7 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
 
   return (
     <div className="flex-1 flex flex-col h-full bg-[#0a0a0a]">
-      {/* Header 部分 */}
+      {/* Header 部分（完整保留） */}
       <header className="p-6 border-b border-white/5 flex justify-between items-center bg-[#141414] shadow-xl relative z-10">
         <div className="flex items-center space-x-4">
           <button onClick={onBack} className="p-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-full transition-all">
@@ -151,18 +192,17 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
             <h2 className="text-xl font-bold text-white flex items-center">
               {episode.title}
               {episode.shots.length > 0 && (
-  <span className="ml-3 px-2 py-0.5 bg-indigo-600/20 text-indigo-400 text-[10px] rounded uppercase border border-indigo-600/30 font-black">
-    50-60 镜深度拆解模式
-  </span>
-)}
-</h2>
-<div className="flex items-center space-x-4 mt-1">
-  <span className="text-xs text-gray-500 font-bold">创作进度：{episode.shots.length} 镜 (目标 50-60 镜)</span>
-</div>
+                <span className="ml-3 px-2 py-0.5 bg-indigo-600/20 text-indigo-400 text-[10px] rounded uppercase border border-indigo-600/30 font-black">
+                  50-60 镜深度拆解模式
+                </span>
+              )}
+            </h2>
+            <div className="flex items-center space-x-4 mt-1">
+              <span className="text-xs text-gray-500 font-bold">创作进度：{episode.shots.length} 镜 (目标 50-60 镜)</span>
+            </div>
           </div>
         </div>
 
-        {/* 风格切换选择器 - 放在中间或右侧 */}
         <div className="flex items-center bg-black/40 p-1.5 rounded-2xl border border-white/5 mx-4">
           {['情绪流', '非情绪流'].map((s) => (
             <button
@@ -192,7 +232,7 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
             onClick={handleGenerate}
             disabled={isGenerating}
             className={`px-6 py-2 rounded-xl font-black flex items-center space-x-2 transition-all shadow-xl ${
-              isGenerating ? 'bg-blue-600/50 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/40'
+              isGenerating ? 'bg-blue-600/50 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-500 shadow-blue-900/40'
             }`}
           >
             {isGenerating ? (
@@ -204,7 +244,7 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
         </div>
       </header>
 
-      {/* 主体内容滚动区 */}
+      {/* 主体内容滚动区（完整保留） */}
       <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
         {error && (
           <div className="mb-8 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-500 text-sm flex items-center space-x-3">
@@ -231,7 +271,6 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
           </div>
         )}
 
-        {/* 镜头列表渲染 */}
         {episode.shots.length > 0 && (
           <div className="grid grid-cols-1 gap-10 max-w-6xl mx-auto pb-10">
             {episode.shots.map((shot, idx) => (
@@ -286,7 +325,6 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
               </div>
             ))}
 
-            {/* 继续生成按钮 */}
             {currentBatch < 2 && !isGenerating && (
               <div className="flex justify-center py-10">
                 <button

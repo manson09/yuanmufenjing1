@@ -31,12 +31,15 @@ const STORYBOARD_PROMPT = `
 【🚨 数量与边界逻辑（重要调整）】
 【🚨 核心名词定义与权限隔离】
 1. **本集目标剧本（Target Script）**：指在 User Message 中明确给出的文本。这是你**唯一**的剧情来源。
-2. **【本集目标剧本】的最后一个字就是世界的终点**，严禁续写，严禁跳跃到原著后续章节。
+2. **拍完即止**：镜头数随剧情自然生成（上限60），拍完【本集目标剧本】的文字内容后必须立即停止。，严禁续写，严禁跳跃到原著后续章节。
+
+【🎬 核心规范：拒绝重复生成】
+1. **严格顺序执行**：你必须按照剧本的文字顺序往后拍。
+2. **禁止回溯**：如果 User 提示你“上接分镜状态”，说明前面的情节已经拍摄完成。你必须**立刻、直接**从接下来的新情节开始，绝对禁止重复描述已经出现过的动作或画面。
 
 【🎬 导演级权重分配逻辑】
 1. **识别高潮**：请通读下方 User Message 提供的【本集目标剧本】，识别其中的动作冲突点。
 2. **原子化扩充**：严禁平均分配镜头。平淡对话请大幅合并；高潮动作请执行“原子化拆解,
-3. **拍完即止**：镜头数随剧情自然生成（下限45，上限60），拍完【本集目标剧本】的文字内容后必须立即停止。
 
 导演演绎区（受限创作）
 你只被允许做以下事情：
@@ -305,47 +308,53 @@ export async function generateStoryboard(
 ): Promise<Shot[]> {
   if (batchIndex > 0) return [];
 
-  // 将 KB 明确标记为“设定参考”，而不是“剧本”
+  const script = episode.script;
   const kbContext = kb.length > 0
-    ? clampText(kb.map(f => `【设定参考（仅限查询视觉特征）】：${f.content}`).join('\n'), 10000)
+    ? clampText(kb.map(f => `【设定参考（仅限视觉）】：${f.content}`).join('\n'), 10000)
     : "（暂无）";
 
-  const script = episode.script;
-  const scriptMid = Math.floor(script.length / 2);
-  const scriptPart1 = script.slice(0, scriptMid);
-  const scriptPart2 = script.slice(scriptMid);
+  // --- 逻辑切分优化：从最近的换行符切分，防止切断句子 ---
+  const mid = Math.floor(script.length / 2);
+  const splitIndex = script.lastIndexOf('\n', mid) !== -1 ? script.lastIndexOf('\n', mid) : mid;
+  
+  const scriptPart1 = script.slice(0, splitIndex).trim();
+  const scriptPart2 = script.slice(splitIndex).trim();
 
   try {
-    // --- 第一阶段：识别本集全貌，但只生成前半部分 ---
-    console.log("🚀 [第一阶段] 正在分析本集内容并生成前半段...");
+    console.log("🚀 [第一阶段] 正在分析并生成前半段...");
     const rawContent1 = await fetchWithStream([
       { role: "system", content: STORYBOARD_PROMPT + (STYLE_PROMPTS[style] || "") },
       { role: "system", content: kbContext },
       { 
         role: "user", 
-        content: `【本集完整目标剧本（仅供节奏识别参考）】：\n${script}\n\n【当前生成任务】：请仅针对上述剧本的【前半部分文字】（见下方）生成对应分镜。
-        
-        【待处理文字】：\n${scriptPart1}`
+        content: `【本集完整剧本参考】：\n${script}\n\n【当前任务】：请仅针对剧本的【前半部分文字】生成分镜。文字到这里为止：\n${scriptPart1}`
       }
     ]);
 
     let shotsPart1 = safeJsonParse(rawContent1) || [];
     shotsPart1 = shotsPart1.map((s: any, i: number) => ({ ...s, shotNumber: i + 1 }));
     const p1Count = shotsPart1.length;
-    const lastShot = shotsPart1[p1Count - 1];
+    
+    // 获取最后一段剧情文本，作为第二阶段的隔离锚点
+    const p1LastText = scriptPart1.slice(-50); 
 
-    // --- 第二阶段：衔接生成剩余部分 ---
-    console.log(`✅ [第二阶段] 接续生成后半段...`);
+    console.log(`✅ 第一阶段完成。正在进行“剧情防重复”衔接生成...`);
+
     const rawContent2 = await fetchWithStream([
       { role: "system", content: STORYBOARD_PROMPT + (STYLE_PROMPTS[style] || "") },
       { role: "system", content: kbContext },
       { 
         role: "user", 
-        content: `【上接分镜状态】：${lastShot?.visualDescription || "起始"}
+        content: `【剧情进度断点】：上一阶段已经拍摄完以下情节：“${p1LastText}”。
         
-        【本集目标剧本剩余后半段】：\n${scriptPart2}
-        
-        【要求】：请从第 ${p1Count + 1} 镜开始接续，将以上文字内容拍完即刻停止，严禁续写。` 
+【上接分镜画面】：${shotsPart1[p1Count-1]?.visualDescription || "起始状态"}
+
+【接下来的目标剧本】：\n${scriptPart2}
+
+【强制指令】：
+1. 请从第 ${p1Count + 1} 镜开始接续。
+2. **严禁重复**生成已经拍摄过的情节画面！
+3. 请直接从剧本中“${p1LastText}”之后的第一句新文字开始拍摄。` 
       }
     ]);
 
@@ -363,7 +372,7 @@ export async function generateStoryboard(
     });
 
   } catch (err) {
-    console.error("分镜生成中断:", err);
+    console.error("生成失败:", err);
     throw err;
   }
 }
@@ -373,8 +382,8 @@ function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
   const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
   return {
     ...currentShot,
-    visualDescription: isOngoing ? `【接前动作】${currentShot.visualDescription}` : currentShot.visualDescription,
-    viduPrompt: isOngoing ? `[Match Action] ${currentShot.viduPrompt}` : currentShot.viduPrompt
+    visualDescription: isOngoing ? `【衔接动作】${currentShot.visualDescription}` : currentShot.visualDescription,
+    viduPrompt: isOngoing ? `[Match Continuity] ${currentShot.viduPrompt}` : currentShot.viduPrompt
   };
 }
 
@@ -388,7 +397,7 @@ export async function regenerateSingleShot(
 ): Promise<Shot> {
   const raw = await fetchWithStream([
     { role: "system", content: STORYBOARD_PROMPT },
-    { role: "user", content: `重新设计第 ${shotToRegenerate.shotNumber} 镜。请严格遵守【本集目标剧本】的内容范围。` }
+    { role: "user", content: `重新设计第 ${shotToRegenerate.shotNumber} 镜。严禁超出本段剧本内容。` }
   ]);
   const parsed = safeJsonParse(raw);
   const newShotData = Array.isArray(parsed) ? parsed[0] : (parsed?.shot || parsed);

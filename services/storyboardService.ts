@@ -15,7 +15,7 @@ const STYLE_PROMPTS = {
 【当前执行风格：情绪流（极致冲突型）】
 镜头偏好：增加角色面部特写、眼神细节、颤抖的肢体。
 节奏控制：在冲突爆发前，通过极细碎的慢镜头（如汗水滴落、瞳孔收缩）拉长紧张感。
-视觉重点：强调光影的反差、角色的压迫感、以及环境对人物情绪的烘托（如风卷残云、雷电交加）。`,
+视觉重点：强调光影的反差、角色的压迫感、以及环境对人物情绪的烘托（如风卷云、雷电交加）。`,
 '非情绪流': `
 【当前执行风格：非情绪流（诙谐脑洞型）】
 镜头偏好：增加中景和远景以展示环境互动，利用有趣的运镜（如快速推拉、摇拍）制造节奏感。
@@ -164,7 +164,7 @@ Vidu 生成适配优化：
 明确描写其被中断的可见原因（被击中、被格挡、被拉开、轨迹被改变）
 严禁以下行为：
 在未交代中断或结算过程的情况下，直接跳入新事件
-让新的攻击或动作覆盖、取代尚未结算的动作
+let 新的攻击或动作覆盖、取代尚未结算的动作
 将“上一镜头正在发生的动作”视为已完成或可忽略
 若新的事件（如远程攻击、第三方介入）发生，
 必须以“中断未完成动作”为前提进行描写，而不是并行忽略。
@@ -243,46 +243,37 @@ viduPrompt 严禁将人物台词加入到viduPrompt里
 -2D动漫风格，暗夜森林谷口，近景，固定镜头。一枚高速飞来的蛛丝球从画面前方坠落，正面撞击地面。撞击瞬间，蛛丝球本体发生明显解体，球状结构迅速崩散消失，化为大量向外扩张的蛛丝。蛛丝在地面铺展成一张扁平的大型蛛网，紧密贴附在地表，网丝拉紧并固定，呈现出明显的黏附与束缚状态。
 空间逻辑：必须描述攻击物的运动矢量（例如：由画面左下角射向右上方，或由画外中心点逼近）。
 请返回符合以下格式的 JSON 数组（Array of Objects），字段包含：shotNumber(int), duration(string), shotType(string), movement(string), visualDescription(string), dialogue(string), emotion(string), viduPrompt(string)。
-确保数组长度不少于 60。
+确保数组长度不少于 50-60。
 `;
 
-/**
-核心请求函数：负责单次生成 20 个镜头并清洗数据
-*/
-async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number, count: number, systemPrompt: string) {
+async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number, count: number) {
 const response = await openai.chat.completions.create({
 model: "google/gemini-3-pro-preview",
 messages: [
 { role: "system", content: STORYBOARD_PROMPT },
 {
 role: "user",
-content: `${kbContext}\n\n【批次任务】：你现在只负责生成总任务中的第 ${range} 个分镜，起始编号为 ${startNo}。\n【数量要求】：本批次必须精准拆解出 ${count} 个分镜。\n【待处理剧本】：\n${scriptPart}\n\n请严格返回纯 JSON 格式：{"shots": [...]}`
+content: `${kbContext}\n\n【批次任务】：你现在只负责生成总任务中的第 ${range} 个分镜，起始编号为 ${startNo}。\n【数量要求】：本批次必须精准拆解出 ${count} 个分镜。\n【剧本】：\n${scriptPart}\n\n请严格返回纯 JSON 格式：{"shots": [...]}`
 }
 ],
 response_format: { type: "json_object" }
 });
-// ... 后续清理逻辑保持不变
 const rawText = response.choices[0].message.content || "";
 const cleanJson = rawText.replace(/json/g, "").replace(/```/g, "").trim();
 try {
 const parsed = JSON.parse(cleanJson);
 return parsed.shots || parsed.s || (Array.isArray(parsed) ? parsed : []);
 } catch (e) {
-const matches = cleanJson.match(/{"(shotNumber|n|s)":[\s\S]*?}/g);
+const matches = cleanJson.match(/{"shotNumber":[\s\S]*?}/g);
 return matches ? matches.map(m => {
 try { return JSON.parse(m.endsWith('}') ? m : m + '}'); } catch { return null; }
 }).filter(Boolean) : [];
 }
 }
-
 function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
 if (!prevShot) return currentShot;
-// 检查前一镜是否处于动作进行中
 const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
-const coreAction =
-prevShot.coreAction ||
-prevShot.visualDescription?.slice(0, 30) ||
-"上一镜头未完成的关键动作";
+const coreAction = prevShot.visualDescription?.slice(0, 30) || "上一镜头未完成的关键动作";
 return {
 shotNumber: currentShot.shotNumber || currentShot.n || 0,
 duration: currentShot.duration || currentShot.d || "3s",
@@ -299,9 +290,7 @@ viduPrompt: isOngoing
 actionState: currentShot.actionState
 };
 }
-
 export type ScriptStyle = '情绪流' | '非情绪流';
-
 export async function generateStoryboard(
 episode: Episode,
 kb: KBFile[],
@@ -321,46 +310,32 @@ const batchConfigs = [
   { range: "21-40", start: Math.floor(len / 3) - 200,  end: Math.floor(len * 2 / 3) + 200, startNo: 21, count: 20 },
   { range: "41-60", start: Math.floor(len * 2 / 3) - 200, end: len,                          startNo: 41, count: 20 }
 ];
-
 const config = batchConfigs[batchIndex] || batchConfigs[0];
 const currentScriptPart = script.substring(config.start, config.end);
-
-let finalBatchInstruction = "";
-if (batchIndex === 2) {
-  finalBatchInstruction = `\n\n【收尾阶段特别要求】：这是剧本的最后一部分。请确保完整覆盖所有对话和结局。你可以根据剩余剧情的丰富程度，灵活生成 10 到 20 个镜头。如果剧情结束了，请立即停止，总镜数在 50-60 之间即可。`;
-}
-
 const lastShotContext = previousShots.length > 0 
   ? `\n\n【上文衔接提醒】：上一镜（第${previousShots.length}镜）视觉内容为：${previousShots[previousShots.length - 1].visualDescription}。请确保本批次第一镜逻辑连贯。`
   : "";
-
 console.log(`🚀 正在生成第 ${batchIndex + 1} 阶段分镜 (${config.range})...`);
-
 const newRawShots = await fetchShotsBatch(
-  currentScriptPart + lastShotContext + finalBatchInstruction, 
+  currentScriptPart + lastShotContext, 
   kbContext, 
   config.range, 
   config.startNo,
-  config.count,
-  dynamicPrompt
+  config.count 
 );
-
 const processedNewShots = newRawShots.map((shot: any, index: number) => {
   const prev = (index === 0 && previousShots.length > 0) 
     ? previousShots[previousShots.length - 1] 
     : newRawShots[index - 1];
   return injectActionCarryover(shot, prev);
 });
-
 console.log(`✅ 第 ${batchIndex + 1} 阶段生成完成，获得 ${processedNewShots.length} 个镜头。`);
-
 return processedNewShots;
 } catch (err) {
 console.error(`第 ${batchIndex} 阶段生成失败:`, err);
 throw err;
 }
 }
-
 export async function regenerateSingleShot(
 episode: Episode,
 kb: KBFile[],

@@ -1,27 +1,30 @@
 import OpenAI from 'openai';
 import { Episode, KBFile, Shot } from "../types";
+
 // 初始化 OpenRouter 客户端
 const openai = new OpenAI({
-apiKey: import.meta.env.VITE_OPENAI_API_KEY,
-baseURL: import.meta.env.VITE_BASE_URL || "https://openrouter.ai/api/v1",
-dangerouslyAllowBrowser: true,
-defaultHeaders: {
-"HTTP-Referer": "https://yuanmufenjing1.pages.dev",
-"X-Title": "ViduAnime Master",
-}
+  apiKey: import.meta.env.VITE_OPENAI_API_KEY,
+  baseURL: import.meta.env.VITE_BASE_URL || "https://openrouter.ai/api/v1",
+  dangerouslyAllowBrowser: true,
+  defaultHeaders: {
+    "HTTP-Referer": "https://yuanmufenjing1.pages.dev",
+    "X-Title": "ViduAnime Master",
+  }
 });
+
 const STYLE_PROMPTS = {
-'情绪流': `
+  '情绪流': `
 【当前执行风格：情绪流（极致冲突型）】
 镜头偏好：增加角色面部特写、眼神细节、颤抖的肢体。
 节奏控制：在冲突爆发前，通过极细碎的慢镜头（如汗水滴落、瞳孔收缩）拉长紧张感。
 视觉重点：强调光影的反差、角色的压迫感、以及环境对人物情绪的烘托（如风卷残云、雷电交加）。`,
-'非情绪流': `
+  '非情绪流': `
 【当前执行风格：非情绪流（诙谐脑洞型）】
 镜头偏好：增加中景和远景以展示环境互动，利用有趣的运镜（如快速推拉、摇拍）制造节奏感。
 节奏控制：强调动作的连贯性和反转，不需要过多的内心戏。
 视觉重点：强调趣味性、夸张的动作曲线、人物萌版表情以及隐藏在背景里的热梗或细节等等。`
 };
+
 const STORYBOARD_PROMPT = `
 你是一位世界顶级的动漫爽剧分镜导演、动作指导（武指）和 AI 视频提示词专家，同时还是顶级剪辑大师，极其擅长爽剧节奏把控。
 你的核心任务是将剧本扩展为具备极高信息量、视觉密度极大的爽剧分镜脚本，且镜头数量【必须在 50 到 60 个之间】。
@@ -212,7 +215,7 @@ AI 视频是单镜头生成的，你必须通过“显式引用”来维持逻�
 第 5 镜（发招）：A 挥剑劈出一道[弯月形、带有黑色烟雾、边缘暗红的剑气]。
 第 6 镜（受击）：[弯月形、带有黑色烟雾、边缘暗红的剑气] 击中 B 的盾牌，黑烟在盾牌表面炸裂开来。
 空间逻辑：必须描述攻击物的运动矢量（例如：由画面左下角射向右上方，或由画外中心点逼近）。
-4.在生成受击或反击分镜时，请务必核对并复用前一个镜头中设定的技能颜色、形状和特效描述，确保视觉参数绝对统一。
+4.在生成受击/反击分镜时，请务必核对并复用前一个镜头中设定的技能颜色、形状和特效描述，确保视觉参数绝对统一。
 【🎬 动作状态标签系统（Action State System）】
 在生成每一个分镜时，你必须为当前镜头中最重要的动作或威胁行为判定一个【动作状态】。
 动作状态只允许以下四种之一（不可自创）：
@@ -254,118 +257,251 @@ viduPrompt 严禁将人物台词加入到viduPrompt里
 确保数组长度在 50-60 之间。
 `;
 
+// ✅ MOD: 从本集剧本中抽取“允许出现的人名集合”（用于越界检测）
+function extractAllowedNamesFromScript(scriptPart: string): Set<string> {
+  const names = new Set<string>();
+
+  // 常见剧本格式：角色名：对白 / 角色名（动作）：... / 人物：...
+  // 只抓“冒号/括号”前的中文段
+  const lines = scriptPart.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // 例：萧沉砚（虚弱）：既如此……
+    // 例：云玉娇：无双道长，那贱人真的死透了吗？
+    // 例：管家（冷汗直流）：这……
+    const m = trimmed.match(/^([\u4e00-\u9fa5]{1,8})(?=（|:|：)/);
+    if (m?.[1]) names.add(m[1]);
+
+    // 兼容：人物：云玉娇、无双道长
+    const m2 = trimmed.match(/^(人物|角色)\s*[:：]\s*([\u4e00-\u9fa5、，,\s]{2,})/);
+    if (m2?.[2]) {
+      const parts = m2[2].split(/[、，,\s]+/).map(s => s.trim()).filter(Boolean);
+      for (const p of parts) {
+        if (/^[\u4e00-\u9fa5]{1,8}$/.test(p)) names.add(p);
+      }
+    }
+  }
+
+  // 兜底：如果没抓到，避免误杀，返回空集合（不做名字越界判定）
+  return names;
+}
+
+// ✅ MOD: 检测是否含有“串集/前情/集数跳转”等明显越界标记
+function hasCrossEpisodeMarkers(text: string): boolean {
+  const markers = [
+    /第\s*\d+\s*集/,
+    /上一集|下集|前情|回顾/,
+    /多年后|后来|与此同时|另一边/,
+    /上回说到|未完待续/
+  ];
+  return markers.some(r => r.test(text));
+}
+
+// ✅ MOD: 判断某一镜是否出现“本集未出现的人名”（仅当 allowedNames 非空时启用）
+function findOutOfScopeNames(text: string, allowedNames: Set<string>): string[] {
+  if (!allowedNames || allowedNames.size === 0) return [];
+
+  // 简单抓取：连续2~8个中文（可能包含人名/称谓/地名），再用 allowedNames 过滤
+  const candidates = new Set<string>();
+  const re = /[\u4e00-\u9fa5]{2,8}/g;
+  let m: RegExpExecArray | null;
+
+  while ((m = re.exec(text)) !== null) {
+    const token = m[0];
+    // 排除一些常见非人名词（可按你项目再扩充）
+    if (/^(镜头|画面|特写|近景|中景|远景|固定镜头|推镜|拉镜|摇镜|跟拍|室内|室外|夜|日|内|外|雷电|风|尘土|碎石|空气)$/.test(token)) {
+      continue;
+    }
+    // 排除“二小姐/王爷/管家/亲兵”等通用称谓（你如果希望也纳入约束，可以删掉这段）
+    if (/^(王爷|管家|亲兵|侍卫|丫鬟|道长|将军|大人|公子|小姐|夫人|二小姐)$/.test(token)) {
+      continue;
+    }
+    candidates.add(token);
+  }
+
+  const out: string[] = [];
+  for (const c of candidates) {
+    // 如果候选词恰好是已知角色名 => ok
+    if (allowedNames.has(c)) continue;
+    // 若候选词包含已知角色名（如“萧沉砚”在“萧沉砚手中”里）=> ok
+    let containsKnown = false;
+    for (const a of allowedNames) {
+      if (c.includes(a) || a.includes(c)) {
+        containsKnown = true;
+        break;
+      }
+    }
+    if (!containsKnown) out.push(c);
+  }
+  return out;
+}
+
 async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number, count: number) {
-const response = await openai.chat.completions.create({
-model: "google/gemini-3-pro-preview",
-messages: [
-{ role: "system", content: STORYBOARD_PROMPT },
-{
-role: "user",
-content: `【仅供参考的视觉设定/外貌特征字典】：\n${kbContext}\n\n【本集剧本（当前唯一必须执行的剧情现实）】：\n${scriptPart}\n\n【生成指令】：识别剧本中的高潮高光时刻，将70%的分镜额度倾注在此，进行动作原子化拆解；其余平淡部分请大幅压缩合并。一次性生成范围 ${range}，目标约 ${count} 镜。请严格返回纯 JSON 格式：{"shots": [...]}`
-}
-],
-response_format: { type: "json_object" }
-});
-const rawText = response.choices[0].message.content || "";
-const cleanJson = rawText.replace(/json/g, "").replace(/```/g, "").trim();
-try {
-const parsed = JSON.parse(cleanJson);
-return parsed.shots || parsed.s || (Array.isArray(parsed) ? parsed : []);
-} catch (e) {
-const matches = cleanJson.match(/{"shotNumber":[\s\S]*?}/g);
-return matches ? matches.map(m => {
-try { return JSON.parse(m.endsWith('}') ? m : m + '}'); } catch { return null; }
-}).filter(Boolean) : [];
-}
+  const response = await openai.chat.completions.create({
+    model: "google/gemini-3-pro-preview",
+    messages: [
+      // ✅ MOD: 把 KB 独立成 system “参考设定资料”，降低其作为“剧情来源”的概率
+      { role: "system", content: STORYBOARD_PROMPT },
+      { role: "system", content: `【参考设定资料（只用于外貌/视觉一致性，严禁当作剧情来源）】\n${kbContext}` },
+      {
+        role: "user",
+        content: `【本集剧本（当前唯一必须执行的剧情现实）】：\n${scriptPart}\n\n【生成指令】：识别剧本中的高潮高光时刻，将更多的分镜额度倾注在此，进行动作原子化拆解；其余平淡部分请大幅压缩合并。一次性生成范围 ${range}，目标约 ${count} 镜。请严格返回纯 JSON 格式：{"shots": [...]}`
+      }
+    ],
+    response_format: { type: "json_object" }
+  });
+
+  const rawText = response.choices[0].message.content || "";
+  const cleanJson = rawText.replace(/json/g, "").replace(/```/g, "").trim();
+  try {
+    const parsed = JSON.parse(cleanJson);
+    return parsed.shots || parsed.s || (Array.isArray(parsed) ? parsed : []);
+  } catch (e) {
+    const matches = cleanJson.match(/{"shotNumber":[\s\S]*?}/g);
+    return matches ? matches.map(m => {
+      try { return JSON.parse(m.endsWith('}') ? m : m + '}'); } catch { return null; }
+    }).filter(Boolean) : [];
+  }
 }
 
 function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
-if (!prevShot) return currentShot;
-const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
-const coreAction = prevShot.visualDescription?.slice(0, 30) || "上一镜头动作";
-return {
-shotNumber: currentShot.shotNumber || 0,
-duration: currentShot.duration || "3s",
-shotType: currentShot.shotType || "中景",
-movement: currentShot.movement || "固定镜头",
-visualDescription: isOngoing
-? `【动作继承】承接上一镜未完成动作：${coreAction}。\n${currentShot.visualDescription}`
-: currentShot.visualDescription,
-dialogue: currentShot.dialogue || "",
-emotion: currentShot.emotion || "",
-viduPrompt: isOngoing
-? `【未完成动作继承】上一镜动作继续：${currentShot.viduPrompt}`
-: currentShot.viduPrompt,
-actionState: currentShot.actionState
-};
+  if (!prevShot) return currentShot;
+  const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
+  const coreAction = prevShot.visualDescription?.slice(0, 30) || "上一镜头动作";
+  return {
+    shotNumber: currentShot.shotNumber || 0,
+    duration: currentShot.duration || "3s",
+    shotType: currentShot.shotType || "中景",
+    movement: currentShot.movement || "固定镜头",
+    visualDescription: isOngoing
+      ? `【动作继承】承接上一镜未完成动作：${coreAction}。\n${currentShot.visualDescription}`
+      : currentShot.visualDescription,
+    dialogue: currentShot.dialogue || "",
+    emotion: currentShot.emotion || "",
+    viduPrompt: isOngoing
+      ? `【未完成动作继承】上一镜动作继续：${currentShot.viduPrompt}`
+      : currentShot.viduPrompt,
+    actionState: currentShot.actionState
+  };
 }
 
 export type ScriptStyle = '情绪流' | '非情绪流';
 
 export async function generateStoryboard(
-episode: Episode,
-kb: KBFile[],
-batchIndex: number = 0,
-previousShots: Shot[] = [],
-style: ScriptStyle = '情绪流'
+  episode: Episode,
+  kb: KBFile[],
+  batchIndex: number = 0,
+  previousShots: Shot[] = [],
+  style: ScriptStyle = '情绪流'
 ): Promise<Shot[]> {
-if (batchIndex > 0) return [];
-const dynamicPrompt = `${STORYBOARD_PROMPT}\n\n${STYLE_PROMPTS[style]}`;
-const kbContext = kb.length > 0
-? kb.map(f => `【参考设定资料：${f.name}】\n${f.content}`).join('\n')
-: "（暂无特定知识库）";
-try {
-const script = episode.script;
-console.log(`🚀 正在发起全量加权生成 (目标 60 镜，隔离模式)...`);
-const newRawShots = await fetchShotsBatch(
-  script, 
-  kbContext, 
-  "1-60", 
-  1,
-  60 
-);
-const processedNewShots = newRawShots.map((shot: any, index: number) => {
-  const prev = newRawShots[index - 1]; 
-  return injectActionCarryover(shot, prev);
-});
-return processedNewShots;
-} catch (err) {
-console.error(`分镜生成失败:`, err);
-throw err;
-}
+  if (batchIndex > 0) return [];
+
+  const dynamicPrompt = `${STORYBOARD_PROMPT}\n\n${STYLE_PROMPTS[style]}`;
+  const kbContext = kb.length > 0
+    ? kb.map(f => `【参考设定资料：${f.name}】\n${f.content}`).join('\n')
+    : "（暂无特定知识库）";
+
+  try {
+    const script = episode.script;
+    console.log(`🚀 正在发起全量加权生成 (目标 60 镜，隔离模式)...`);
+
+    const newRawShots = await fetchShotsBatch(
+      script,
+      kbContext,
+      "1-60",
+      1,
+      60
+    );
+
+    const processedNewShots = newRawShots.map((shot: any, index: number) => {
+      const prev = newRawShots[index - 1];
+      return injectActionCarryover(shot, prev);
+    });
+
+    // ✅ MOD: 越界检测 + 自动“单镜重生”兜底（防串集）
+    const allowedNames = extractAllowedNamesFromScript(script);
+    const fixedShots: Shot[] = [...processedNewShots];
+
+    // 最多修复 N 个镜头，避免无限重试（可按你成本调整）
+    const MAX_FIXES = 12;
+    let fixes = 0;
+
+    for (let i = 0; i < fixedShots.length; i++) {
+      if (fixes >= MAX_FIXES) break;
+
+      const s = fixedShots[i];
+      const blob = `${s.visualDescription || ""}\n${s.dialogue || ""}\n${s.viduPrompt || ""}`;
+
+      const crossEpisode = hasCrossEpisodeMarkers(blob);
+      const outNames = findOutOfScopeNames(blob, allowedNames);
+
+      // 触发条件：明显串集标记 或 出现大量“本集未出现的人名候选”
+      // （阈值你可调：>=2 更稳，>=1 更严格）
+      const shouldFix = crossEpisode || outNames.length >= 2;
+
+      if (!shouldFix) continue;
+
+      try {
+        const prevShot = i > 0 ? fixedShots[i - 1] : undefined;
+        const regenerated = await regenerateSingleShot(
+          episode,
+          kb,
+          s,
+          prevShot
+        );
+        fixedShots[i] = regenerated;
+        fixes += 1;
+      } catch (e) {
+        // 重生失败就跳过，不影响整体输出
+        console.warn(`⚠️ 单镜重生失败（第 ${s.shotNumber} 镜），已跳过`, e);
+      }
+    }
+
+    return fixedShots;
+  } catch (err) {
+    console.error(`分镜生成失败:`, err);
+    throw err;
+  }
 }
 
 export async function regenerateSingleShot(
-episode: Episode,
-kb: KBFile[],
-shotToRegenerate: Shot,
-previousShot?: Shot
+  episode: Episode,
+  kb: KBFile[],
+  shotToRegenerate: Shot,
+  previousShot?: Shot
 ): Promise<Shot> {
-const kbContext = kb.length > 0
-? kb.map(f => `【视觉字典/设定参考】：\n${f.content}`).join('\n')
-: "（暂无特定知识库）";
-const userPrompt = `
+  const kbContext = kb.length > 0
+    ? kb.map(f => `【视觉字典/设定参考】：\n${f.content}`).join('\n')
+    : "（暂无特定知识库）";
+
+  const userPrompt = `
 重新设计第 ${shotToRegenerate.shotNumber} 镜。要求画面细节更丰富，严格遵守剧本逻辑，保持与上文连贯。
 【上文参考】：${previousShot ? previousShot.visualDescription : "无"}
 【原分镜内容】：${shotToRegenerate.visualDescription}
-【当前剧本片段（唯一剧情真理）】：${episode.script.slice(0, 1500)}...
+【当前剧本片段（唯一剧情真理）】：${episode.script.slice(0, 1000)}...
 `;
-const response = await openai.chat.completions.create({
-model: "google/gemini-3-pro-preview",
-messages: [
-{ role: "system", content: STORYBOARD_PROMPT },
-{ role: "user", content: kbContext + "\n\n" + userPrompt }
-],
-response_format: { type: "json_object" }
-});
-const rawText = response.choices[0].message.content || "";
-const cleanJson = rawText.replace(/json/g, "").replace(/```/g, "").trim();
-try {
-const parsed = JSON.parse(cleanJson);
-const newShotData = parsed.shot || (Array.isArray(parsed.shots) ? parsed.shots[0] : parsed);
-return injectActionCarryover(newShotData, previousShot);
-} catch (e) {
-console.error("解析单镜头 JSON 失败:", e);
-return shotToRegenerate;
-}
+
+  const response = await openai.chat.completions.create({
+    model: "google/gemini-3-pro-preview",
+    messages: [
+      // ✅ MOD: 同样拆分 KB 与本集剧本，降低串集概率
+      { role: "system", content: STORYBOARD_PROMPT },
+      { role: "system", content: `【参考设定资料（只用于外貌/视觉一致性，严禁当作剧情来源）】\n${kbContext}` },
+      { role: "user", content: userPrompt }
+    ],
+    response_format: { type: "json_object" }
+  });
+
+  const rawText = response.choices[0].message.content || "";
+  const cleanJson = rawText.replace(/json/g, "").replace(/```/g, "").trim();
+  try {
+    const parsed = JSON.parse(cleanJson);
+    const newShotData = parsed.shot || (Array.isArray(parsed.shots) ? parsed.shots[0] : parsed);
+    return injectActionCarryover(newShotData, previousShot);
+  } catch (e) {
+    console.error("解析单镜头 JSON 失败:", e);
+    return shotToRegenerate;
+  }
 }

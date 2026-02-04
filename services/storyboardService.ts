@@ -24,7 +24,7 @@ const STYLE_PROMPTS = {
 };
 const STORYBOARD_PROMPT = `
 你是一位世界顶级的动漫爽剧分镜导演、动作指导（武指）和 AI 视频提示词专家，同时还是顶级剪辑大师，极其擅长爽剧节奏把控。
-你的核心任务是将剧本扩展为具备极高信息量、视觉密度极大的爽剧分镜脚本，且镜头数量【必须在 50 到 60 个之间】】。
+你的核心任务是将剧本扩展为具备极高信息量、视觉密度极大的爽剧分镜脚本，且镜头数量【必须在 50 到 60 个之间】。
 
 导演演绎区（受限创作）
 你只被允许做以下事情：
@@ -229,6 +229,10 @@ resolved：动作已完成并产生明确结果
 且其作用对象正在执行 ongoing 状态的动作，
 该新事件必须被描述为“中断该动作的原因”，
 而不是并行发生。
+【🔴 动态分镜密度权重（节奏硬约束）】
+严禁平均分配镜头！请通过以下规则控制密度：
+1.叙事平淡期：大幅合并动作，使用中远景，镜头占比控制在20%内。
+2.爆发高潮期：执行“视觉原子化”。剧本的一句话动作必须拆解为10个以上极致细节镜头（起手、破空、敌方惊恐、撞击、能量炸裂等），占总镜头数的70%以上。
 【🔴 红色警戒：禁止事项】
 绝对禁止添加原著中不存在的剧情情节、新角色或新对话。
 严禁擅自转场/收尾：如果剧本结束时角色还在原地，绝对不能生成“离开”的镜头。
@@ -253,8 +257,7 @@ messages: [
 { role: "system", content: STORYBOARD_PROMPT },
 {
 role: "user",
-// 【隔离逻辑】：明确标注知识库用途，防止混淆剧情
-content: `【知识库（仅供外貌、招式、场景等视觉参考）】：\n${kbContext}\n\n【本集剧本（剧情以此为准，禁止引用知识库中的其他剧情情节）】：\n${scriptPart}\n\n【生成任务】：请根据“本集剧本”一次性生成完整分镜。\n【镜头范围】：${range}\n【目标数量】：本任务必须精准生成约 ${count} 个分镜。\n\n请严格返回纯 JSON 格式：{"shots": [...]}`
+content: `【知识库参考（严禁提取剧情，仅限视觉参考）】：\n${kbContext}\n\n【本集待处理剧本（唯一剧情来源）】：\n${scriptPart}\n\n【生成指令】：请识别剧本高潮，将70%的分镜额度倾注在高潮动作拆解上，平淡叙事则一笔带过。一次性生成范围 ${range}，目标约 ${count} 镜。请严格返回纯 JSON 格式：{"shots": [...]}`
 }
 ],
 response_format: { type: "json_object" }
@@ -275,20 +278,20 @@ try { return JSON.parse(m.endsWith('}') ? m : m + '}'); } catch { return null; }
 function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
 if (!prevShot) return currentShot;
 const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
-const coreAction = prevShot.visualDescription?.slice(0, 30) || "上一镜头未完成的关键动作";
+const coreAction = prevShot.visualDescription?.slice(0, 30) || "上一镜头动作";
 return {
-shotNumber: currentShot.shotNumber || currentShot.n || 0,
-duration: currentShot.duration || currentShot.d || "3s",
-shotType: currentShot.shotType || currentShot.t || "中景",
+shotNumber: currentShot.shotNumber || 0,
+duration: currentShot.duration || "3s",
+shotType: currentShot.shotType || "中景",
 movement: currentShot.movement || "固定镜头",
 visualDescription: isOngoing
-? `【动作继承】承接上一镜头未完成的动作：${coreAction}。\n${currentShot.visualDescription || currentShot.v}`
-: (currentShot.visualDescription || currentShot.v),
+? `【动作继承】承接上一镜未完成动作：${coreAction}。\n${currentShot.visualDescription}`
+: currentShot.visualDescription,
 dialogue: currentShot.dialogue || "",
 emotion: currentShot.emotion || "",
 viduPrompt: isOngoing
-? `【未完成动作继承】上一镜头动作在本镜头继续：${currentShot.viduPrompt || currentShot.p}`
-: (currentShot.viduPrompt || currentShot.p),
+? `【未完成动作继承】上一镜动作继续：${currentShot.viduPrompt}`
+: currentShot.viduPrompt,
 actionState: currentShot.actionState
 };
 }
@@ -305,11 +308,11 @@ style: ScriptStyle = '情绪流'
 if (batchIndex > 0) return [];
 const dynamicPrompt = `${STORYBOARD_PROMPT}\n\n${STYLE_PROMPTS[style]}`;
 const kbContext = kb.length > 0
-? kb.map(f => `【参考资料：${f.name}】\n${f.content}`).join('\n')
+? kb.map(f => `【参考文档：${f.name}】\n${f.content}`).join('\n')
 : "（暂无特定知识库）";
 try {
 const script = episode.script;
-console.log(`🚀 正在发起一次性全量生成 (目标 60 镜)...`);
+console.log(`🚀 正在发起全量加权生成 (目标 60 镜)...`);
 const newRawShots = await fetchShotsBatch(
   script, 
   kbContext, 
@@ -321,7 +324,6 @@ const processedNewShots = newRawShots.map((shot: any, index: number) => {
   const prev = newRawShots[index - 1]; 
   return injectActionCarryover(shot, prev);
 });
-console.log(`✅ 一次性生成完成，共获得 ${processedNewShots.length} 个镜头。`);
 return processedNewShots;
 } catch (err) {
 console.error(`分镜生成失败:`, err);
@@ -336,22 +338,18 @@ shotToRegenerate: Shot,
 previousShot?: Shot
 ): Promise<Shot> {
 const kbContext = kb.length > 0
-? kb.map(f => `【视觉字典参考】：\n${f.content}`).join('\n')
+? kb.map(f => `【参考知识库】：\n${f.content}`).join('\n')
 : "（暂无特定知识库）";
 const userPrompt = `
-你现在需要重新设计一个分镜。
-【上文参考】：${previousShot ? previousShot.visualDescription : "这是本片第一镜，无上文"}
-【待优化分镜原内容】：${shotToRegenerate.visualDescription}
-【待处理剧本片段（剧情以此为准）】：${episode.script.slice(0, 1500)}...
-1.请基于以上信息，重新生成第 ${shotToRegenerate.shotNumber} 镜。要求：
-2.画面表现力更强，动作细节更丰富。
-3.必须严格保持与上文镜头的逻辑、位置、光影连贯。
-4.按照指定的 JSON 格式返回。
+重新设计第 ${shotToRegenerate.shotNumber} 镜。要求画面细节更丰富，保持与上文连贯。
+【上文参考】：${previousShot ? previousShot.visualDescription : "无"}
+【原分镜内容】：${shotToRegenerate.visualDescription}
+【当前剧本范围】：${episode.script.slice(0, 1500)}...
 `;
 const response = await openai.chat.completions.create({
 model: "google/gemini-3-pro-preview",
 messages: [
-{ role: "system", content: STORYBOARD_PROMPT + "\n请只返回一个包含该分镜信息的 JSON 对象，不要返回数组。" },
+{ role: "system", content: STORYBOARD_PROMPT },
 { role: "user", content: kbContext + "\n\n" + userPrompt }
 ],
 response_format: { type: "json_object" }

@@ -243,14 +243,14 @@ viduPrompt 严禁将人物台词加入到viduPrompt里
 -2D动漫风格，暗夜森林谷口，近景，固定镜头。一枚高速飞来的蛛丝球从画面前方坠落，正面撞击地面。撞击瞬间，蛛丝球本体发生明显解体，球状结构迅速崩散消失，化为大量向外扩张的蛛丝。蛛丝在地面铺展成一张扁平的大型蛛网，紧密贴附在地表，网丝拉紧并固定，呈现出明显的黏附与束缚状态。
 空间逻辑：必须描述攻击物的运动矢量（例如：由画面左下角射向右上方，或由画外中心点逼近）。
 请返回符合以下格式的 JSON 数组（Array of Objects），字段包含：shotNumber(int), duration(string), shotType(string), movement(string), visualDescription(string), dialogue(string), emotion(string), viduPrompt(string)。
-确保数组长度不少于 60。
-`;
+确保数组长度不少于 60。`;
+
 /**
 核心请求函数：负责单次生成 20 个镜头并清洗数据
 */
 async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number, count: number, systemPrompt: string) {
 const response = await openai.chat.completions.create({
-model: "openai/gpt-5.2",
+model: "google/gemini-3-pro-preview",
 messages: [
 { role: "system", content: STORYBOARD_PROMPT },
 {
@@ -291,28 +291,26 @@ try { return JSON.parse(m.endsWith('}') ? m : m + '}'); } catch { return null; }
 }
 }
 function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
-if (!prevShot) return currentShot;
-// 检查前一镜是否处于动作进行中（基于你 Prompt 里的 actionState 标签）
-const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
-const coreAction =
-prevShot.coreAction ||
-prevShot.visualDescription?.slice(0, 30) ||
-"上一镜头未完成的关键动作";
-return {
-shotNumber: currentShot.shotNumber || currentShot.n || 0,
-duration: currentShot.duration || currentShot.d || "3s",
-shotType: currentShot.shotType || currentShot.t || "中景",
-movement: currentShot.movement || "固定镜头",
-visualDescription: isOngoing
-? 【动作继承】承接上一镜头未完成的动作：${coreAction}。\n${currentShot.visualDescription || currentShot.v}
-: (currentShot.visualDescription || currentShot.v),
-dialogue: currentShot.dialogue || "",
-emotion: currentShot.emotion || "",
-viduPrompt: isOngoing
-? 【未完成动作继承】上一镜头动作在本镜头继续：${currentShot.viduPrompt || currentShot.p}
-: (currentShot.viduPrompt || currentShot.p),
-actionState: currentShot.actionState
-};
+  if (!prevShot) return currentShot;
+  const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
+  const coreAction = prevShot.visualDescription?.slice(0, 30) || "上一镜头动作";
+
+  return {
+    shotNumber: currentShot.shotNumber || 0,
+    duration: currentShot.duration || "3s",
+    shotType: currentShot.shotType || "中景",
+    movement: currentShot.movement || "固定镜头",
+    // 修复点：这里必须使用反引号 `` 包裹
+    visualDescription: isOngoing
+      ? `【动作继承】承接上一镜头：${coreAction}。\n${currentShot.visualDescription}`
+      : currentShot.visualDescription,
+    dialogue: currentShot.dialogue || "",
+    emotion: currentShot.emotion || "",
+    viduPrompt: isOngoing
+      ? `【未完成动作继承】上一镜头动作在本镜头继续：${currentShot.viduPrompt}`
+      : currentShot.viduPrompt,
+    actionState: currentShot.actionState
+  };
 }
 export async function generateStoryboard(
 episode: Episode,
@@ -399,7 +397,7 @@ const userPrompt = `
 4.按照指定的 JSON 格式返回。
 `;
 const response = await openai.chat.completions.create({
-model: "openai/gpt-5.2",
+model: "google/gemini-3-pro-preview",
 messages: [
 { role: "system", content: STORYBOARD_PROMPT + "\n请只返回一个包含该分镜信息的 JSON 对象，不要返回数组。" },
 { role: "user", content: kbContext + "\n\n" + userPrompt }

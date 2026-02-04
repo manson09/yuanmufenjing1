@@ -243,7 +243,7 @@ viduPrompt 严禁将人物台词加入到viduPrompt里
 -2D动漫风格，暗夜森林谷口，近景，固定镜头。一枚高速飞来的蛛丝球从画面前方坠落，正面撞击地面。撞击瞬间，蛛丝球本体发生明显解体，球状结构迅速崩散消失，化为大量向外扩张的蛛丝。蛛丝在地面铺展成一张扁平的大型蛛网，紧密贴附在地表，网丝拉紧并固定，呈现出明显的黏附与束缚状态。
 空间逻辑：必须描述攻击物的运动矢量（例如：由画面左下角射向右上方，或由画外中心点逼近）。
 请返回符合以下格式的 JSON 数组（Array of Objects），字段包含：shotNumber(int), duration(string), shotType(string), movement(string), visualDescription(string), dialogue(string), emotion(string), viduPrompt(string)。
-确保数组长度在 50-60之间。
+确保数组长度在 50-60 之间。
 `;
 
 async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number, count: number) {
@@ -253,7 +253,8 @@ messages: [
 { role: "system", content: STORYBOARD_PROMPT },
 {
 role: "user",
-content: `${kbContext}\n\n【生成任务】：请根据以下剧本一次性生成完整分镜。\n【镜头范围】：${range}\n【目标数量】：本任务必须精准生成约 ${count} 个分镜。\n【剧本内容】：\n${scriptPart}\n\n请严格返回纯 JSON 格式：{"shots": [...]}`
+// 【隔离逻辑】：明确标注知识库用途，防止混淆剧情
+content: `【知识库（仅供外貌、招式、场景等视觉参考）】：\n${kbContext}\n\n【本集剧本（剧情以此为准，禁止引用知识库中的其他剧情情节）】：\n${scriptPart}\n\n【生成任务】：请根据“本集剧本”一次性生成完整分镜。\n【镜头范围】：${range}\n【目标数量】：本任务必须精准生成约 ${count} 个分镜。\n\n请严格返回纯 JSON 格式：{"shots": [...]}`
 }
 ],
 response_format: { type: "json_object" }
@@ -301,17 +302,13 @@ batchIndex: number = 0,
 previousShots: Shot[] = [],
 style: ScriptStyle = '情绪流'
 ): Promise<Shot[]> {
-// 如果不是第一批次，直接返回空（因为我们在第一步就生成了全部 60 个）
 if (batchIndex > 0) return [];
-
 const dynamicPrompt = `${STORYBOARD_PROMPT}\n\n${STYLE_PROMPTS[style]}`;
 const kbContext = kb.length > 0
-? kb.map(f => `【参考文档：${f.name}】\n${f.content}`).join('\n')
+? kb.map(f => `【参考资料：${f.name}】\n${f.content}`).join('\n')
 : "（暂无特定知识库）";
 try {
 const script = episode.script;
-
-// 修改点：一次性请求 60 个镜头
 console.log(`🚀 正在发起一次性全量生成 (目标 60 镜)...`);
 const newRawShots = await fetchShotsBatch(
   script, 
@@ -320,14 +317,11 @@ const newRawShots = await fetchShotsBatch(
   1,
   60 
 );
-
 const processedNewShots = newRawShots.map((shot: any, index: number) => {
-  const prev = newRawShots[index - 1]; // 在全量数组中建立前后继承关系
+  const prev = newRawShots[index - 1]; 
   return injectActionCarryover(shot, prev);
 });
-
 console.log(`✅ 一次性生成完成，共获得 ${processedNewShots.length} 个镜头。`);
-
 return processedNewShots;
 } catch (err) {
 console.error(`分镜生成失败:`, err);
@@ -342,13 +336,13 @@ shotToRegenerate: Shot,
 previousShot?: Shot
 ): Promise<Shot> {
 const kbContext = kb.length > 0
-? kb.map(f => `【参考文档：${f.name}】\n${f.content}`).join('\n')
+? kb.map(f => `【视觉字典参考】：\n${f.content}`).join('\n')
 : "（暂无特定知识库）";
 const userPrompt = `
 你现在需要重新设计一个分镜。
 【上文参考】：${previousShot ? previousShot.visualDescription : "这是本片第一镜，无上文"}
 【待优化分镜原内容】：${shotToRegenerate.visualDescription}
-【待处理剧本片段】：${episode.script.slice(0, 1000)}...
+【待处理剧本片段（剧情以此为准）】：${episode.script.slice(0, 1500)}...
 1.请基于以上信息，重新生成第 ${shotToRegenerate.shotNumber} 镜。要求：
 2.画面表现力更强，动作细节更丰富。
 3.必须严格保持与上文镜头的逻辑、位置、光影连贯。

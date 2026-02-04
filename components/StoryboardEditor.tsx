@@ -16,39 +16,38 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
   const [currentBatch, setCurrentBatch] = useState(0); 
   const [selectedStyle, setSelectedStyle] = useState<ScriptStyle>('情绪流');
 
-  // ✨ 云端存储唯一 ID
+  // ✨ 本地存储唯一 ID
   const storageId = `storyboard_${episode.title}`;
 
-  // ✨ 新增：云端保存函数
+  // ✨ 修改：由云端保存改为本地浏览器保存
   const saveToCloud = async (shots: Shot[]) => {
     try {
-      await fetch('/api/save-shots', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: storageId, data: shots }),
-      });
-      console.log("☁️ 进度已同步至 Cloudflare KV");
+      localStorage.setItem(storageId, JSON.stringify(shots));
+      console.log("💾 进度已同步至本地存储");
     } catch (err) {
       console.error("存档失败:", err);
     }
   };
 
-  // ✨ 新增：页面加载时自动恢复进度
+  // ✨ 修改：由云端恢复改为从本地浏览器恢复进度
   useEffect(() => {
     const loadSavedWork = async () => {
       if (episode.shots && episode.shots.length > 0) return;
       try {
-        const response = await fetch(`/api/get-shots?id=${storageId}`);
-        const savedData = await response.json();
-        if (savedData && savedData.length > 0) {
-          onUpdate({ 
-            shots: savedData, 
-            status: savedData.length >= 50 ? 'completed' : 'generating' 
-          });
-          setCurrentBatch(Math.floor(savedData.length / 20) - 1);
+        const savedDataRaw = localStorage.getItem(storageId);
+        if (savedDataRaw) {
+          const savedData = JSON.parse(savedDataRaw);
+          if (savedData && savedData.length > 0) {
+            onUpdate({ 
+              shots: savedData, 
+              status: savedData.length >= 50 ? 'completed' : 'generating' 
+            });
+            setCurrentBatch(Math.floor(savedData.length / 20) - 1);
+            console.log("✅ 已恢复历史进度");
+          }
         }
       } catch (e) {
-        console.log("云端暂无存档");
+        console.log("本地暂无存档");
       }
     };
     loadSavedWork();
@@ -59,7 +58,7 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
     setIsGenerating(true);
     setError(null);
     try {
-      const shots = await generateStoryboard(episode, kb, 0, [], selectedStyle);
+      const shots = await generateStoryboard(episode, kb, selectedStyle);
       onUpdate({ shots, status: 'generating' });
       setCurrentBatch(0);
       // ✨ 自动保存
@@ -78,7 +77,7 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
     setError(null);
     try {
       const nextBatch = currentBatch + 1;
-      const moreShots = await generateStoryboard(episode, kb, nextBatch, episode.shots, selectedStyle);
+      const moreShots = await generateStoryboard(episode, kb, selectedStyle);
       const updatedShots = [...episode.shots, ...moreShots];
       onUpdate({ 
         shots: updatedShots, 
@@ -180,7 +179,7 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
 
   return (
     <div className="flex-1 flex flex-col h-full bg-[#0a0a0a]">
-      {/* Header 部分（完整保留） */}
+      {/* Header 部分 */}
       <header className="p-6 border-b border-white/5 flex justify-between items-center bg-[#141414] shadow-xl relative z-10">
         <div className="flex items-center space-x-4">
           <button onClick={onBack} className="p-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-full transition-all">
@@ -244,7 +243,7 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
         </div>
       </header>
 
-      {/* 主体内容滚动区（完整保留） */}
+      {/* 主体内容滚动区 */}
       <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
         {error && (
           <div className="mb-8 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-500 text-sm flex items-center space-x-3">

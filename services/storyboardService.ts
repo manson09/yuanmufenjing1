@@ -136,20 +136,20 @@ Step 2：检查描述内容
 允许同框对话：如果 A 和 B 正在进行连贯的、面对面的深度交流，可以同框（但仍建议按话头拆镜）。
 禁止断层同框：像“李凡重伤（状态 A）+ 爱丽丝冲入（动作 B）+ 凯瑟琳解释（反应 C）”，这在电影剪辑中属于三个不同的节拍（Beat），强制要求拆分为三个分镜。
 Vidu 生成适配优化：
-每一镜的 `viduPrompt` 必须只描述【当前说话者】的动作细节。
+每一镜的 \`viduPrompt\` 必须只描述【当前说话者】的动作细节。
 如果一镜里塞了三个人的话，Vidu 的视觉描述会变得臃肿，导致生成出来的视频里三个人都在乱动，没有焦点。
 【上下文强关联强制规则（极其重要）】
-由于视频生成模型以“单镜头独立生成”为基础，每一个 viduPrompt 必须被视为一个全新的生成起点。
-因此，无论剧情上是否为连续镜头，每一个 viduPrompt 中都必须完整、明确地包含以下信息，不得省略：
+由于视频生成模型以“单镜头独立生成”为基础，每一个 \`viduPrompt\` 必须被视为一个全新的生成起点。
+因此，无论剧情上是否为连续镜头，每一个 \`viduPrompt\` 中都必须完整、明确地包含以下信息，不得省略：
 第一，当前镜头所处的具体场景环境。
 即使与上一镜头处于同一地点，也必须再次明确描述该场景的类型与关键环境特征，例如广场、街道、室内房间、树林、战场等。
 第二，角色的初始空间状态。
 必须说明角色在该镜头开始时的位置关系和状态，例如坐在长椅上、站在街道中央、靠在墙边、正向某个方向行走等。
 第三，承接上一镜头的可见要素。
 如人物所处位置、手中物品、已出现的道具、正在持续的动作或状态，在本镜头中必须再次被明确提及，而不得依赖前一镜头的隐含理解。
-禁止出现仅在上一镜头出现、但在本镜头 viduPrompt 中被省略的关键信息。
+禁止出现仅在上一镜头出现、但在本镜头 \`viduPrompt\` 中被省略的关键信息。
 禁止假设视频生成模型能够理解跨镜头的场景连续性。
-每一个 viduPrompt 都必须在脱离前后镜头的情况下，依然能够被单独生成出正确场景与人物关系。
+每一个 \`viduPrompt\` 都必须在脱离前后镜头的情况下，依然能够被单独生成出正确场景与人物关系。
 可以将一段对白拆开放在两个或多个镜头里，但必须保证这两个或多个镜头都符合对白的内容。
 【⛓️ 未完成动作强制继承规则（导演级硬约束）】
 在任意镜头中，若出现以下情形之一：
@@ -159,7 +159,7 @@ Vidu 生成适配优化：
 尚未结算的空间位移或力量传递过程
 则该行为被视为【未完成动作】。
 强制规则如下：
-下一镜头的 viduPrompt 中，必须显式引用该未完成动作的当前状态，并满足以下之一：
+下一镜头的 \`viduPrompt\` 中，必须显式引用该未完成动作的当前状态，并满足以下之一：
 明确继续其运动过程（接近 → 接触 → 命中 / 偏移）
 明确描写其被中断的可见原因（被击中、被格挡、被拉开、轨迹被改变）
 严禁以下行为：
@@ -170,7 +170,7 @@ Vidu 生成适配优化：
 必须以“中断未完成动作”为前提进行描写，而不是并行忽略。
 本规则优先级高于镜头美感、高于节奏调度，用于保证物理因果连续性。
 【镜头语言决策与约束规则（导演级）】
-你在生成每一个分镜时，必须先完成一次“镜头语言判断”，再书写 viduPrompt。
+你在生成每一个分镜时，必须先完成一次“镜头语言判断”，再书写 \`viduPrompt\`。
 禁止为了“画面好看”而使用运镜，所有运镜必须服务于爽剧叙事目的。
 二，关于景别选择的判断规则：
 远景或中远景用于建立场景空间关系，展示人物所处环境。
@@ -236,14 +236,15 @@ resolved：动作已完成并产生明确结果
 语言限制：所有其他字段必须严格使用中文。
 viduPrompt 严禁将人物台词加入到viduPrompt里
 【Vidu 提示词规范】
-结构：`[2D动漫风格][场景][景别+运镜] 画面描述`。
-角色名清洗：严禁使用 `[赵阔]` 这种独立标签。角色名必须作为主语融入描述。
+结构：\`[2D动漫风格][场景][景别+运镜] 画面描述\`。
+角色名清洗：严禁使用 \`[赵阔]\` 这种独立标签。角色名必须作为主语融入描述。
 视觉锚定：严格遵守知识库外貌描写。
 ✅ 范例：
 -2D动漫风格，暗夜森林谷口，近景，固定镜头。一枚高速飞来的蛛丝球从画面前方坠落，正面撞击地面。撞击瞬间，蛛丝球本体发生明显解体，球状结构迅速崩散消失，化为大量向外扩张的蛛丝。蛛丝在地面铺展成一张扁平的大型蛛网，紧密贴附在地表，网丝拉紧并固定，呈现出明显的黏附与束缚状态。
 空间逻辑：必须描述攻击物的运动矢量（例如：由画面左下角射向右上方，或由画外中心点逼近）。
 请返回符合以下格式的 JSON 数组（Array of Objects），字段包含：shotNumber(int), duration(string), shotType(string), movement(string), visualDescription(string), dialogue(string), emotion(string), viduPrompt(string)。
-确保数组长度不少于 60。`;
+确保数组长度不少于 60。
+`;
 
 /**
 核心请求函数：负责单次生成 20 个镜头并清洗数据
@@ -255,31 +256,14 @@ messages: [
 { role: "system", content: STORYBOARD_PROMPT },
 {
 role: "user",
-// 【修改点】：将硬编码的 20 改为动态的 
-c
-o
-u
-n
-t
-c
-o
-n
-t
-e
-n
-t
-:
-‘
-countcontent:‘
-{kbContext}\n\n【批次任务】：你现在只负责生成总任务中的第 ${range} 个分镜，起始编号为 ${startNo}。\n【数量要求】：本批次必须精准拆解出 
-{scriptPart}\n\n请严格返回纯 JSON 格式：{"shots": [...]}`
+content: `${kbContext}\n\n【批次任务】：你现在只负责生成总任务中的第 ${range} 个分镜，起始编号为 ${startNo}。\n【数量要求】：本批次必须精准拆解出 ${count} 个分镜。\n【待处理剧本】：\n${scriptPart}\n\n请严格返回纯 JSON 格式：{"shots": [...]}`
 }
 ],
 response_format: { type: "json_object" }
 });
 // ... 后续清理逻辑保持不变
 const rawText = response.choices[0].message.content || "";
-const cleanJson = rawText.replace(/json/g, "").replace(//g, "").trim();
+const cleanJson = rawText.replace(/json/g, "").replace(/```/g, "").trim();
 try {
 const parsed = JSON.parse(cleanJson);
 return parsed.shots || parsed.s || (Array.isArray(parsed) ? parsed : []);
@@ -290,28 +274,34 @@ try { return JSON.parse(m.endsWith('}') ? m : m + '}'); } catch { return null; }
 }).filter(Boolean) : [];
 }
 }
-function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
-  if (!prevShot) return currentShot;
-  const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
-  const coreAction = prevShot.visualDescription?.slice(0, 30) || "上一镜头动作";
 
-  return {
-    shotNumber: currentShot.shotNumber || 0,
-    duration: currentShot.duration || "3s",
-    shotType: currentShot.shotType || "中景",
-    movement: currentShot.movement || "固定镜头",
-    // 修复点：这里必须使用反引号 `` 包裹
-    visualDescription: isOngoing
-      ? `【动作继承】承接上一镜头：${coreAction}。\n${currentShot.visualDescription}`
-      : currentShot.visualDescription,
-    dialogue: currentShot.dialogue || "",
-    emotion: currentShot.emotion || "",
-    viduPrompt: isOngoing
-      ? `【未完成动作继承】上一镜头动作在本镜头继续：${currentShot.viduPrompt}`
-      : currentShot.viduPrompt,
-    actionState: currentShot.actionState
-  };
+function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
+if (!prevShot) return currentShot;
+// 检查前一镜是否处于动作进行中
+const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
+const coreAction =
+prevShot.coreAction ||
+prevShot.visualDescription?.slice(0, 30) ||
+"上一镜头未完成的关键动作";
+return {
+shotNumber: currentShot.shotNumber || currentShot.n || 0,
+duration: currentShot.duration || currentShot.d || "3s",
+shotType: currentShot.shotType || currentShot.t || "中景",
+movement: currentShot.movement || "固定镜头",
+visualDescription: isOngoing
+? `【动作继承】承接上一镜头未完成的动作：${coreAction}。\n${currentShot.visualDescription || currentShot.v}`
+: (currentShot.visualDescription || currentShot.v),
+dialogue: currentShot.dialogue || "",
+emotion: currentShot.emotion || "",
+viduPrompt: isOngoing
+? `【未完成动作继承】上一镜头动作在本镜头继续：${currentShot.viduPrompt || currentShot.p}`
+: (currentShot.viduPrompt || currentShot.p),
+actionState: currentShot.actionState
+};
 }
+
+export type ScriptStyle = '情绪流' | '非情绪流';
+
 export async function generateStoryboard(
 episode: Episode,
 kb: KBFile[],
@@ -319,9 +309,9 @@ batchIndex: number = 0,
 previousShots: Shot[] = [],
 style: ScriptStyle = '情绪流'
 ): Promise<Shot[]> {
-const dynamicPrompt = ${STORYBOARD_PROMPT}\n\n${STYLE_PROMPTS[style]};
+const dynamicPrompt = `${STORYBOARD_PROMPT}\n\n${STYLE_PROMPTS[style]}`;
 const kbContext = kb.length > 0
-? kb.map(f => 【参考文档：${f.name}】\n${f.content}).join('\n')
+? kb.map(f => `【参考文档：${f.name}】\n${f.content}`).join('\n')
 : "（暂无特定知识库）";
 try {
 const script = episode.script;
@@ -329,14 +319,12 @@ const len = script.length;
 const batchConfigs = [
   { range: "1-20",  start: 0,                          end: Math.floor(len / 3) + 200,    startNo: 1,  count: 20 },
   { range: "21-40", start: Math.floor(len / 3) - 200,  end: Math.floor(len * 2 / 3) + 200, startNo: 21, count: 20 },
-  // 第三段设为 41-60，但我们将 count 传为 20，并告诉 AI 可以根据剧情灵活收尾
   { range: "41-60", start: Math.floor(len * 2 / 3) - 200, end: len,                          startNo: 41, count: 20 }
 ];
 
 const config = batchConfigs[batchIndex] || batchConfigs[0];
 const currentScriptPart = script.substring(config.start, config.end);
 
-// 【新增逻辑】：如果是最后一个批次，加入“弹性指令”
 let finalBatchInstruction = "";
 if (batchIndex === 2) {
   finalBatchInstruction = `\n\n【收尾阶段特别要求】：这是剧本的最后一部分。请确保完整覆盖所有对话和结局。你可以根据剩余剧情的丰富程度，灵活生成 10 到 20 个镜头。如果剧情结束了，请立即停止，总镜数在 50-60 之间即可。`;
@@ -348,13 +336,13 @@ const lastShotContext = previousShots.length > 0
 
 console.log(`🚀 正在生成第 ${batchIndex + 1} 阶段分镜 (${config.range})...`);
 
-// 【修改点】：传入 config.count
 const newRawShots = await fetchShotsBatch(
-  currentScriptPart + lastShotContext, 
+  currentScriptPart + lastShotContext + finalBatchInstruction, 
   kbContext, 
   config.range, 
   config.startNo,
-  config.count 
+  config.count,
+  dynamicPrompt
 );
 
 const processedNewShots = newRawShots.map((shot: any, index: number) => {
@@ -368,14 +356,11 @@ console.log(`✅ 第 ${batchIndex + 1} 阶段生成完成，获得 ${processedNe
 
 return processedNewShots;
 } catch (err) {
-console.error(第 ${batchIndex} 阶段生成失败:, err);
+console.error(`第 ${batchIndex} 阶段生成失败:`, err);
 throw err;
 }
 }
-/**
-核心新增：单镜头重新生成逻辑
-专门用于点击“🔄 重刷此镜”时调用
-*/
+
 export async function regenerateSingleShot(
 episode: Episode,
 kb: KBFile[],
@@ -383,13 +368,12 @@ shotToRegenerate: Shot,
 previousShot?: Shot
 ): Promise<Shot> {
 const kbContext = kb.length > 0
-? kb.map(f => 【参考文档：${f.name}】\n${f.content}).join('\n')
+? kb.map(f => `【参考文档：${f.name}】\n${f.content}`).join('\n')
 : "（暂无特定知识库）";
-// 构建专门针对这一镜的 Prompt，要求它更精准地优化
 const userPrompt = `
 你现在需要重新设计一个分镜。
-【上文参考】：previousShot?previousShot.visualDescription:"这是本片第一镜，无上文"【待优化分镜原内容】：
-{shotToRegenerate.visualDescription}
+【上文参考】：${previousShot ? previousShot.visualDescription : "这是本片第一镜，无上文"}
+【待优化分镜原内容】：${shotToRegenerate.visualDescription}
 【待处理剧本片段】：${episode.script.slice(0, 1000)}...
 1.请基于以上信息，重新生成第 ${shotToRegenerate.shotNumber} 镜。要求：
 2.画面表现力更强，动作细节更丰富。
@@ -405,16 +389,13 @@ messages: [
 response_format: { type: "json_object" }
 });
 const rawText = response.choices[0].message.content || "";
-const cleanJson = rawText.replace(/json/g, "").replace(//g, "").trim();
+const cleanJson = rawText.replace(/json/g, "").replace(/```/g, "").trim();
 try {
 const parsed = JSON.parse(cleanJson);
-// 处理 AI 可能返回的格式（有的 AI 会嵌套一层 "shot" 或 "shots"）
 const newShotData = parsed.shot || (Array.isArray(parsed.shots) ? parsed.shots[0] : parsed);
 return injectActionCarryover(newShotData, previousShot);
 } catch (e) {
 console.error("解析单镜头 JSON 失败:", e);
-// 如果解析失败，返回原镜头防止报错
 return shotToRegenerate;
 }
-}    
-
+}

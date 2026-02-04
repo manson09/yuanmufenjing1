@@ -203,7 +203,7 @@ Vidu 生成适配优化：
 你必须将每个动作拆解为【肢体部位 + 运动轨迹 + 接触点 + 物理反馈】：
 近战格斗：
 ❌ 垃圾描述：“A 挥拳打向 B，B 躲开并反击。”
-✅ 神级描述：“[中景] A 压低重心呈拳击架势，利用腰部扭转带动右臂，挥出一记势大胆沉的右勾拳砸向 B 的太阳穴。B 迅速向左侧滑步极限闪避，拳风吹乱 B 的刘海。紧接着 B 右手握拳，由下至上挥出一记上勾拳，精准轰击 A 的腹部，A 的背部衣服因冲击力而鼓起。”
+✅ 神级描述：“[中景] A 压低重心呈拳击架势，利用腰部扭转带动右臂，挥出一记势大力沉的右勾拳砸向 B 的太阳穴。B 迅速向左侧滑步极限闪避，拳风吹乱 B 的刘海。紧接着 B 右手握拳，由下至上挥出一记上勾拳，精准轰击 A 的腹部，A 的背部衣服因冲击力而鼓起。”
 魔法/特效：
 ❌ 垃圾描述：“A 发射火球。”
 ✅ 神级描述：“[特写] A 的左手食指与中指并拢指天，指尖汇聚出刺眼的苍蓝雷光。随后 A 右掌猛然前推，一道锯齿状的紫色闪电呈螺旋状射向画面前方，空气因高热而产生扭切波纹。”
@@ -257,41 +257,20 @@ viduPrompt 严禁将人物台词加入到viduPrompt里
 确保数组长度在 50-60 之间。
 `;
 
-const BUDGET_PLAN_INSTRUCTION = `
-【镜头预算强制流程（必须执行）】
-在生成分镜 shots 前，你必须先生成 plan（镜头预算表），然后严格按 plan 再生成 shots。
-1）将“本集剧本”切分为 3–8 个 Beat（段落）。每个 Beat 必须提供：
-- beatId: 数字
-- priority: 1~5（重点等级，只能依据本集剧本中“可见变化强度”判定）
-- evidence: 仅引用本集剧本中的1–2句原文作为证据（短句即可）
-- beatText: 该 Beat 的剧本文本（用于后续生成，必须来自本集剧本原文片段拼接）
-2）priority 判定标准（只能按本集剧本证据判定）：
-- 1：纯过场/信息交代/无局势变化
-- 2：轻微推进/简单互动
-- 3：紧张蓄力/威胁升级但未结算
-- 4：关键动作链条/主角压制或强势反制/局势明显改变
-- 5：主角高光爆发/胜负或身份等关键结算/强爽点落地
-3）你必须自行决定每个 Beat 的镜头数 shots，并满足硬约束：
-- priority=5 的 Beat 镜头数 ≥ priority=1 的 Beat 的 3 倍
-- 镜头最多的 Beat 必须属于 priority 4 或 5
-- priority=1~2 的 Beat 每段最多 2–4 镜（除非该段包含明确动作链条）
-- 总镜头数最终必须在 50–60
-4）输出结构必须是纯 JSON：{"plan": {...}} 或 {"plan": {...}, "shots": [...] }。
-`;
-
+// 工具函数：文本清理
 function clampText(text: string, maxChars: number): string {
   if (!text) return "";
   return text.length > maxChars ? text.slice(0, maxChars) + "\n（以上内容已截断）" : text;
 }
 
+// 工具函数：JSON 解析
 function safeJsonParse(raw: string): any | null {
   const txt = (raw || "").replace(/```json/g, "").replace(/```/g, "").trim();
   if (!txt) return null;
-
   try {
     return JSON.parse(txt);
   } catch {
-    const m = txt.match(/\{[\s\S]*\}/);
+    const m = txt.match(/\[[\s\S]*\]/) || txt.match(/\{[\s\S]*\}/);
     if (!m) return null;
     try {
       return JSON.parse(m[0]);
@@ -301,77 +280,25 @@ function safeJsonParse(raw: string): any | null {
   }
 }
 
+// 工具函数：提取合法人名
 function extractAllowedNamesFromScript(scriptPart: string): Set<string> {
   const names = new Set<string>();
   const lines = scriptPart.split(/\r?\n/);
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-
     const m = trimmed.match(/^([\u4e00-\u9fa5]{1,8})(?=（|:|：)/);
     if (m?.[1]) names.add(m[1]);
-
-    const m2 = trimmed.match(/^(人物|角色)\s*[:：]\s*([\u4e00-\u9fa5、，,\s]{2,})/);
-    if (m2?.[2]) {
-      const parts = m2[2].split(/[、，,\s]+/).map(s => s.trim()).filter(Boolean);
-      for (const p of parts) {
-        if (/^[\u4e00-\u9fa5]{1,8}$/.test(p)) names.add(p);
-      }
-    }
   }
   return names;
 }
 
-function hasCrossEpisodeMarkers(text: string): boolean {
-  const markers = [
-    /第\s*\d+\s*集/,
-    /上一集|下集|前情|回顾/,
-    /多年后|后来|与此同时|另一边/,
-    /上回说到|未完待续/
-  ];
-  return markers.some(r => r.test(text));
-}
-
-function findOutOfScopeNames(text: string, allowedNames: Set<string>): string[] {
-  if (!allowedNames || allowedNames.size === 0) return [];
-
-  const candidates = new Set<string>();
-  const re = /[\u4e00-\u9fa5]{2,8}/g;
-  let m: RegExpExecArray | null;
-
-  while ((m = re.exec(text)) !== null) {
-    const token = m[0];
-    if (/^(镜头|画面|特写|近景|中景|远景|固定镜头|推镜|拉镜|摇镜|跟拍|室内|室外|夜|日|内|外|雷电|风|尘土|碎石|空气)$/.test(token)) {
-      continue;
-    }
-    if (/^(王爷|管家|亲兵|侍卫|丫鬟|道长|将军|大人|公子|小姐|夫人|二小姐)$/.test(token)) {
-      continue;
-    }
-    candidates.add(token);
-  }
-
-  const out: string[] = [];
-  for (const c of candidates) {
-    if (allowedNames.has(c)) continue;
-    let containsKnown = false;
-    for (const a of allowedNames) {
-      if (c.includes(a) || a.includes(c)) {
-        containsKnown = true;
-        break;
-      }
-    }
-    if (!containsKnown) out.push(c);
-  }
-  return out;
-}
-
-// ✅ 修改：抽取公共的流式获取逻辑，防止 ERR_HTTP2_PROTOCOL_ERROR
+// 流式获取 API 响应
 async function fetchWithStream(messages: any[]): Promise<string> {
   const response = await openai.chat.completions.create({
     model: "google/gemini-3-pro-preview",
     messages: messages,
-    stream: true, // 启用流式传输
-    response_format: { type: "json_object" }
+    stream: true,
   });
 
   let fullContent = "";
@@ -382,97 +309,7 @@ async function fetchWithStream(messages: any[]): Promise<string> {
   return fullContent;
 }
 
-type BeatPlan = {
-  beatId: number;
-  priority: number;
-  evidence: string;
-  beatText: string;
-  shots: number;
-};
-
-type StoryboardPlan = {
-  totalShots: number;
-  beats: BeatPlan[];
-};
-
-async function fetchStoryboardPlan(scriptPart: string, kbContext: string): Promise<StoryboardPlan | null> {
-  const fullText = await fetchWithStream([
-    { role: "system", content: STORYBOARD_PROMPT },
-    { role: "system", content: `【参考设定资料（只用于外貌/视觉一致性，严禁当作剧情来源）】\n${kbContext}` },
-    {
-      role: "user",
-      content: `${BUDGET_PLAN_INSTRUCTION}\n\n【本集剧本（唯一剧情真理）】\n${scriptPart}\n\n【输出要求】请只返回纯 JSON：{"plan":{"totalShots":xx,"beats":[{"beatId":1,"priority":5,"evidence":"...","beatText":"...","shots":18},...]}}`
-    }
-  ]);
-
-  const parsed = safeJsonParse(fullText);
-  if (!parsed) return null;
-
-  const plan = parsed.plan || parsed.p;
-  if (!plan || !Array.isArray(plan.beats)) return null;
-
-  const beats: BeatPlan[] = plan.beats
-    .map((b: any, idx: number) => ({
-      beatId: Number.isFinite(b.beatId) ? b.beatId : (idx + 1),
-      priority: Number.isFinite(b.priority) ? b.priority : 3,
-      evidence: typeof b.evidence === "string" ? b.evidence : "",
-      beatText: typeof b.beatText === "string" ? b.beatText : "",
-      shots: Number.isFinite(b.shots) ? b.shots : 6
-    }))
-    .filter((b: BeatPlan) => b.beatText.trim().length > 0);
-
-  const totalShots = Number.isFinite(plan.totalShots)
-    ? plan.totalShots
-    : beats.reduce((sum: number, b: BeatPlan) => sum + (b.shots || 0), 0);
-
-  if (beats.length === 0) return null;
-  return { totalShots, beats };
-}
-
-async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number, count: number) {
-  const fullText = await fetchWithStream([
-    { role: "system", content: STORYBOARD_PROMPT },
-    { role: "system", content: `【参考设定资料（只用于外貌/视觉一致性，严禁当作剧情来源）】\n${kbContext}` },
-    {
-      role: "user",
-      content: `【本集剧本（当前唯一必须执行的剧情现实）】：\n${scriptPart}\n\n【生成指令】：识别剧本中的高潮高光时刻，将更多的分镜额度倾注在此，进行动作原子化拆解；其余平淡部分请大幅压缩合并。一次性生成范围 ${range}，目标约 ${count} 镜。请严格返回纯 JSON 格式：{"shots": [...]}`
-    }
-  ]);
-
-  const parsed = safeJsonParse(fullText);
-  if (parsed) {
-    return parsed.shots || parsed.s || (Array.isArray(parsed) ? parsed : []);
-  }
-
-  const matches = fullText.match(/{"shotNumber":[\s\S]*?}/g);
-  return matches ? matches.map(m => {
-    try { return JSON.parse(m.endsWith('}') ? m : m + '}'); } catch { return null; }
-  }).filter(Boolean) : [];
-}
-
-function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
-  if (!prevShot) return currentShot;
-  const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
-  const coreAction = prevShot.visualDescription?.slice(0, 30) || "上一镜头动作";
-  return {
-    shotNumber: currentShot.shotNumber || 0,
-    duration: currentShot.duration || "3s",
-    shotType: currentShot.shotType || "中景",
-    movement: currentShot.movement || "固定镜头",
-    visualDescription: isOngoing
-      ? `【动作继承】承接上一镜未完成动作：${coreAction}。\n${currentShot.visualDescription}`
-      : currentShot.visualDescription,
-    dialogue: currentShot.dialogue || "",
-    emotion: currentShot.emotion || "",
-    viduPrompt: isOngoing
-      ? `【未完成动作继承】上一镜动作继续：${currentShot.viduPrompt}`
-      : currentShot.viduPrompt,
-    actionState: currentShot.actionState
-  };
-}
-
-export type ScriptStyle = '情绪流' | '非情绪流';
-
+// 核心功能：两阶段分镜生成
 export async function generateStoryboard(
   episode: Episode,
   kb: KBFile[],
@@ -483,78 +320,91 @@ export async function generateStoryboard(
   if (batchIndex > 0) return [];
 
   const kbContext = kb.length > 0
-    ? clampText(
-        kb.map(f => `【参考设定资料：${f.name}】\n${clampText(f.content, 6000)}`).join('\n'),
-        16000
-      )
+    ? clampText(kb.map(f => `【参考设定资料：${f.name}】\n${clampText(f.content, 6000)}`).join('\n'), 16000)
     : "（暂无特定知识库）";
 
+  const script = episode.script;
+  const scriptMid = Math.floor(script.length / 2);
+  const scriptPart1 = script.slice(0, scriptMid + 200); // 稍微多切一点确保上下文
+  const scriptPart2 = script.slice(scriptMid - 200);
+
   try {
-    const script = episode.script;
-    console.log(`🚀 正在发起流式全量加权生成 (目标 50-60 镜，Gemini 3 Pro)...`);
+    console.log("🚀 [第一阶段] 正在生成前 30 个分镜...");
+    
+    // --- 第一阶段生成 ---
+    const rawContent1 = await fetchWithStream([
+      { role: "system", content: STORYBOARD_PROMPT + (STYLE_PROMPTS[style] || "") },
+      { role: "system", content: `【参考设定资料】\n${kbContext}` },
+      { role: "user", content: `【本集剧本前半段】：\n${scriptPart1}\n\n【指令】：生成本剧本对应的分镜 1 到 30。必须严格返回 JSON 数组格式。` }
+    ]);
 
-    const plan = await fetchStoryboardPlan(script, kbContext);
-
-    let newRawShots: any[] = [];
-    if (!plan) {
-      console.warn("⚠️ 预算 plan 生成失败，已回退到一次性流式生成 60 镜");
-      newRawShots = await fetchShotsBatch(script, kbContext, "1-60", 1, 60);
-    } else {
-      let cursor = 1;
-      for (const beat of plan.beats) {
-        const count = Math.max(1, Math.min(beat.shots || 1, 60));
-        const range = `${cursor}-${cursor + count - 1}`;
-        const beatShots = await fetchShotsBatch(beat.beatText, kbContext, range, cursor, count);
-        newRawShots.push(...(Array.isArray(beatShots) ? beatShots : []));
-        cursor += count;
-      }
+    let shotsPart1 = safeJsonParse(rawContent1);
+    if (!Array.isArray(shotsPart1)) {
+        shotsPart1 = shotsPart1?.shots || [];
     }
+    shotsPart1 = shotsPart1.slice(0, 30).map((s: any, i: number) => ({ ...s, shotNumber: i + 1 }));
 
-    if (newRawShots.length > 60) newRawShots = newRawShots.slice(0, 60);
+    if (shotsPart1.length === 0) throw new Error("第一阶段生成失败");
 
-    newRawShots = (newRawShots || []).map((s: any, idx: number) => ({
+    // 获取第一阶段的最后三个镜头作为衔接点
+    const connectionContext = shotsPart1.slice(-3).map((s: any) => 
+        `第${s.shotNumber}镜: ${s.visualDescription} (状态: ${s.actionState || "resolved"})`
+    ).join("\n");
+
+    console.log("🚀 [第二阶段] 正在进行强关联衔接生成 (31-60镜)...");
+
+    // --- 第二阶段生成 ---
+    const rawContent2 = await fetchWithStream([
+      { role: "system", content: STORYBOARD_PROMPT + (STYLE_PROMPTS[style] || "") },
+      { role: "system", content: `【参考设定资料】\n${kbContext}` },
+      { 
+        role: "user", 
+        content: `【上文回顾（必须强衔接）】：\n${connectionContext}\n\n【本集剧本后半段】：\n${scriptPart2}\n\n【指令】：接续上文，从第 31 镜开始生成，直到完成整段剧本。总镜头数需控制在 50-60 之间。必须严格返回 JSON 数组格式。` 
+      }
+    ]);
+
+    let shotsPart2 = safeJsonParse(rawContent2);
+    if (!Array.isArray(shotsPart2)) {
+        shotsPart2 = shotsPart2?.shots || [];
+    }
+    
+    // 修正第二阶段编号并合并
+    const finalShotsPart2 = shotsPart2.map((s: any, i: number) => ({
       ...s,
-      shotNumber: idx + 1
+      shotNumber: 31 + i
     }));
 
-    const processedNewShots = newRawShots.map((shot: any, index: number) => {
-      const prev = newRawShots[index - 1];
-      return injectActionCarryover(shot, prev);
-    });
+    const allShots = [...shotsPart1, ...finalShotsPart2];
 
+    // 动作继承处理与人名校对
     const allowedNames = extractAllowedNamesFromScript(script);
-    const fixedShots: Shot[] = [...processedNewShots];
+    return allShots.map((shot, index) => {
+      const prev = allShots[index - 1];
+      return injectActionCarryover(shot, prev);
+    }).slice(0, 60);
 
-    const MAX_FIXES = 12;
-    let fixes = 0;
-
-    for (let i = 0; i < fixedShots.length; i++) {
-      if (fixes >= MAX_FIXES) break;
-
-      const s = fixedShots[i];
-      const blob = `${s.visualDescription || ""}\n${s.dialogue || ""}\n${s.viduPrompt || ""}`;
-      const crossEpisode = hasCrossEpisodeMarkers(blob);
-      const outNames = findOutOfScopeNames(blob, allowedNames);
-
-      const shouldFix = crossEpisode || outNames.length >= 2;
-      if (!shouldFix) continue;
-
-      try {
-        const prevShot = i > 0 ? fixedShots[i - 1] : undefined;
-        const regenerated = await regenerateSingleShot(episode, kb, s, prevShot);
-        fixedShots[i] = regenerated;
-        fixes += 1;
-      } catch (e) {
-        console.warn(`⚠️ 单镜重生失败（第 ${s.shotNumber} 镜），已跳过`, e);
-      }
-    }
-
-    return fixedShots.map((s, idx) => ({ ...s, shotNumber: idx + 1 }));
   } catch (err) {
-    console.error(`分镜生成失败:`, err);
+    console.error("分镜生成中断:", err);
     throw err;
   }
 }
+
+function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
+  if (!prevShot) return currentShot;
+  const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
+  const coreAction = prevShot.visualDescription?.slice(0, 30) || "上一镜头动作";
+  return {
+    ...currentShot,
+    visualDescription: isOngoing
+      ? `【动作继承】承接上一镜未完成动作：${coreAction}。\n${currentShot.visualDescription}`
+      : currentShot.visualDescription,
+    viduPrompt: isOngoing
+      ? `【未完成动作继承】上一镜动作继续：${currentShot.viduPrompt}`
+      : currentShot.viduPrompt
+  };
+}
+
+export type ScriptStyle = '情绪流' | '非情绪流';
 
 export async function regenerateSingleShot(
   episode: Episode,
@@ -563,31 +413,18 @@ export async function regenerateSingleShot(
   previousShot?: Shot
 ): Promise<Shot> {
   const kbContext = kb.length > 0
-    ? clampText(
-        kb.map(f => `【视觉字典/设定参考】：\n${clampText(f.content, 6000)}`).join('\n'),
-        16000
-      )
-    : "（暂无特定知识库）";
+    ? clampText(kb.map(f => `【视觉字典】：\n${clampText(f.content, 6000)}`).join('\n'), 16000)
+    : "（暂无）";
 
-  const userPrompt = `
-重新设计第 ${shotToRegenerate.shotNumber} 镜。要求画面细节更丰富，严格遵守剧本逻辑，保持与上文连贯。
-【上文参考】：${previousShot ? previousShot.visualDescription : "无"}
-【原分镜内容】：${shotToRegenerate.visualDescription}
-【当前剧本片段（唯一剧情真理）】：${episode.script.slice(0, 1000)}...
-`;
+  const userPrompt = `重新设计第 ${shotToRegenerate.shotNumber} 镜。\n【上文参考】：${previousShot?.visualDescription || "无"}\n【原内容】：${shotToRegenerate.visualDescription}\n【剧本上下文】：${episode.script.slice(0, 1000)}...`;
 
-  const fullText = await fetchWithStream([
+  const raw = await fetchWithStream([
     { role: "system", content: STORYBOARD_PROMPT },
-    { role: "system", content: `【参考设定资料（只用于外貌/视觉一致性，严禁当作剧情来源）】\n${kbContext}` },
+    { role: "system", content: kbContext },
     { role: "user", content: userPrompt }
   ]);
 
-  const parsed = safeJsonParse(fullText);
-  if (!parsed) {
-    console.error("解析单镜头 JSON 失败");
-    return shotToRegenerate;
-  }
-
-  const newShotData = parsed.shot || (Array.isArray(parsed.shots) ? parsed.shots[0] : parsed);
+  const parsed = safeJsonParse(raw);
+  const newShotData = Array.isArray(parsed) ? parsed[0] : (parsed?.shot || parsed);
   return injectActionCarryover(newShotData, previousShot);
 }

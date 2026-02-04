@@ -33,14 +33,18 @@ const STORYBOARD_PROMPT = `
 1. **本集目标剧本（Target Script）**：指在 User Message 中明确给出的文本。这是你**唯一**的剧情来源。
 2. **拍完即止**：镜头数随剧情自然生成（上限60），拍完【本集目标剧本】的文字内容后必须立即停止。，严禁续写，严禁跳跃到原著后续章节。
 
+【🚨 核心指令一：动作复杂度与原子化（针对 ▲ 符号）】
+1. **高动态识别**：若描述涉及多人冲突、位移、破坏（如：黑影扑人、淹没惨叫），必须执行“原子化拆解”，强制拆为 3-5 镜。
+2. **低动态保留**：若仅为单人神态、微动作（如：眉头一皱），保留为 1-2 镜，严禁拖沓。
+3. **物理四步法**：高潮动作必须拍出【威胁逼近 -> 瞬间撞击 -> 核心细节 -> 环境反馈】的完整过程。
+
+【🚨 核心指令二：文戏动态化（针对对白）】
+1. **对白切点（Beats）**：长对白严禁一镜到底。必须根据语义转折（如身份确认转为撩拨暗示）和环境指涉（提到周围环境时）切换镜头。
+2. **强制反应镜**：在对话中穿插听者的表情反应镜头（如震惊、冷笑、眯眼），增加张力。
+
 【🎬 镜头拆解逻辑：智能复杂度审计】
-1. **识别物理信息量**：
-   - **高复杂度（▲型高潮）**：若描述涉及多角色互动、快速位移、超自然特效或物理破坏（如：黑影扑人、法术对轰），**必须**执行原子化拆解（起手、爆发、接触、反馈），至少拆为 3-4 镜。
-   - **低复杂度（▲型细节）**：若描述仅为神态变化、微表情、手部动作、静态姿势、简单动作（如：眉头一皱、手指划过锁骨），则保留为 1-2 个精准的特写镜头，严禁过度拆分导致节奏拖沓。
-2. **强制下限 46 镜的填充策略**：若剧本短，通过增加 [侧面反应] 或 [意境空镜] 填充，严禁通过重复剧情来凑数。
+1. **强制下限 46 镜的填充策略**：若剧本短，通过增加 [侧面反应] 或 [意境空镜] 填充，严禁通过重复剧情来凑数。
    - 若剧本文字较短，请通过增加 **[反应镜头]**（旁观者的惊恐、物体的颤动）或 **[意境空镜]** 来增加密度，而不是去拆分简单的表情。
-3. **拍完即止**：剧本文字结束，世界立即停止，严禁续写下一集内容。
-4. **禁止回溯**：严禁重复生成已经拍摄过的情节。
 
 【🎬 核心规范：拒绝重复生成】
 1. **严格顺序执行**：你必须按照剧本的文字顺序往后拍。
@@ -290,6 +294,7 @@ function safeJsonParse(raw: string): any | null {
   }
 }
 
+// 流式获取 API 响应
 async function fetchWithStream(messages: any[]): Promise<string> {
   const response = await openai.chat.completions.create({
     model: "google/gemini-3-pro-preview",
@@ -313,32 +318,29 @@ export async function generateStoryboard(
   if (batchIndex > 0) return [];
 
   const script = episode.script.trim();
+  // 设定资料只用于参考视觉特征
   const kbContext = kb.length > 0
-    ? `【参考设定资料】：\n${kb.map(f => f.content).join('\n').slice(0, 8000)}`
+    ? `【参考设定资料（仅供查询角色形象与技能颜色，严禁提取剧情）】：\n${kb.map(f => f.content).join('\n').slice(0, 8000)}`
     : "（暂无）";
 
-  // --- 物理切分优化 ---
+  // 按行进行物理隔离，确保不切断对白或动作行
   const lines = script.split('\n').filter(l => l.trim().length > 0);
   const midIndex = Math.floor(lines.length / 2);
-  
-  const scriptPart1Lines = lines.slice(0, midIndex);
-  const scriptPart2Lines = lines.slice(midIndex);
-  
-  const scriptPart1 = scriptPart1Lines.join('\n');
-  const scriptPart2 = scriptPart2Lines.join('\n');
-  const lastLineOfP1 = scriptPart1Lines[scriptPart1Lines.length - 1]; // 第一阶段的最后一句
+  const scriptPart1 = lines.slice(0, midIndex).join('\n');
+  const scriptPart2 = lines.slice(midIndex).join('\n');
+  const lastLineOfP1 = lines[midIndex - 1]; 
 
   try {
-    // --- 第一阶段 ---
-    console.log("🚀 [第一阶段] 正在生成前半段 (1-28镜)...");
+    // --- 第一阶段：包含全集视野，但只生成前半部分 ---
+    console.log("🚀 [第一阶段] 正在分析对白节拍与武戏高潮 (目标 23-28 镜)...");
     const rawContent1 = await fetchWithStream([
       { role: "system", content: STORYBOARD_PROMPT + (STYLE_PROMPTS[style] || "") },
       { role: "system", content: kbContext },
       { 
         role: "user", 
-        content: `【当前任务】：请为以下【本集剧本前半部分】生成分镜。目标生成 23-28 镜。
+        content: `【本集剧本全貌参考】：\n${script}\n\n【当前具体任务】：请仅针对剧本前半部分文字生成分镜。必须生成 23-28 镜，严格执行原子化拆解和对白切分规则。
         
-【本集剧本前半部分】：\n${scriptPart1}`
+【待处理文字内容】：\n${scriptPart1}`
       }
     ]);
 
@@ -347,27 +349,27 @@ export async function generateStoryboard(
     const p1Count = shotsPart1.length;
     const lastShotDesc = shotsPart1[p1Count - 1]?.visualDescription || "";
 
-    console.log(`✅ P1 已生成 ${p1Count} 镜。正在执行硬锚定衔接 P2...`);
+    console.log(`✅ P1 完成。开始第二阶段衔接 (目标总数 46-60 镜)...`);
 
-    // --- 第二阶段：强制跳过 P1 结尾 ---
+    // --- 第二阶段：硬锚定衔接，绝对禁止回溯重复 ---
     const rawContent2 = await fetchWithStream([
       { role: "system", content: STORYBOARD_PROMPT + (STYLE_PROMPTS[style] || "") },
       { role: "system", content: kbContext },
       { 
         role: "user", 
         content: `【拍摄场记 - 严禁回头】：
-1. 已经拍摄完成的最后一句剧本文字是：“${lastLineOfP1}”。
-2. 已经拍摄完成的最后一个画面描述是：“${lastShotDesc}”。
+1. 已经拍完的最后一句剧本文字是：“${lastLineOfP1}”。
+2. 已经拍完的画面终点是：“${lastShotDesc}”。
 
 【当前任务起点】：
-请**立刻且仅从**接下来的剧本文字开始生成分镜。总镜头数需补齐至 46 镜以上。
-
-【待处理剧本内容】：\n${scriptPart2}
+请**立刻且仅从**接下来的文字开始生成分镜。你必须补齐剩余镜头，使两个阶段总数达到 46 镜以上。
 
 【强制指令】：
 - 你的第一个分镜编号必须是 ${p1Count + 1}。
-- **严禁重复**生成任何关于“${lastLineOfP1}”及其之前的内容。
-- 直接进入“${scriptPart2Lines[0]}”的画面表现。` 
+- **严禁重复**生成任何关于“${lastLineOfP1}”及其之前的情节。
+- 严格执行【对白切点】拆分长对白，并对带有 ▲ 符号的高动态动作进行【原子化拆解】。
+
+【待处理剧本后半部分】：\n${scriptPart2}` 
       }
     ]);
 
@@ -410,7 +412,7 @@ export async function regenerateSingleShot(
 ): Promise<Shot> {
   const raw = await fetchWithStream([
     { role: "system", content: STORYBOARD_PROMPT },
-    { role: "user", content: `重新设计第 ${shotToRegenerate.shotNumber} 镜。` }
+    { role: "user", content: `重新设计第 ${shotToRegenerate.shotNumber} 镜。如果是文戏请体现眼神戏，如果是武戏请体现动作冲击力。` }
   ]);
   const parsed = safeJsonParse(raw);
   const newShotData = Array.isArray(parsed) ? parsed[0] : (parsed?.shot || parsed);

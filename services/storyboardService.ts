@@ -280,6 +280,30 @@ const BUDGET_PLAN_INSTRUCTION = `
 4）输出结构必须是纯 JSON：{"plan": {...}} 或 {"plan": {...}, "shots": [...] }。
 `;
 
+// ✅ MOD（新增）：KB 限长，防止上下文撑爆导致模型空返回/截断
+function clampText(text: string, maxChars: number): string {
+  if (!text) return "";
+  return text.length > maxChars ? text.slice(0, maxChars) + "\n（以上内容已截断）" : text;
+}
+
+// ✅ MOD（新增）：JSON 容错解析（空/截断时不会把流程打爆）
+function safeJsonParse(raw: string): any | null {
+  const txt = (raw || "").replace(/```/g, "").trim();
+  if (!txt) return null;
+
+  try {
+    return JSON.parse(txt);
+  } catch {
+    const m = txt.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    try {
+      return JSON.parse(m[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
 // ✅ MOD（新增）：从本集剧本中抽取“允许出现的人名集合”（用于越界检测）
 function extractAllowedNamesFromScript(scriptPart: string): Set<string> {
   const names = new Set<string>();
@@ -360,8 +384,8 @@ type StoryboardPlan = {
   beats: BeatPlan[];
 };
 
-// ✅ MOD（新增）：生成“镜头预算 plan”，让 AI 自己判断重点/带过，并给出每段镜头数
-async function fetchStoryboardPlan(scriptPart: string, kbContext: string) : Promise<StoryboardPlan | null> {
+// ✅ MOD：生成“镜头预算 plan”
+async function fetchStoryboardPlan(scriptPart: string, kbContext: string): Promise<StoryboardPlan | null> {
   const response = await openai.chat.completions.create({
     model: "google/gemini-3-pro-preview",
     messages: [
@@ -375,40 +399,37 @@ async function fetchStoryboardPlan(scriptPart: string, kbContext: string) : Prom
     response_format: { type: "json_object" }
   });
 
-  const rawText = response.choices[0].message.content || "";
+  const rawText = response.choices?.[0]?.message?.content || "";
   const cleanJson = rawText.replace(/json/g, "").replace(/```/g, "").trim();
-  try {
-    const parsed = JSON.parse(cleanJson);
-    const plan = parsed.plan || parsed.p;
-    if (!plan || !Array.isArray(plan.beats)) return null;
 
-    // 轻度清洗与兜底：保证 beatText / shots 有值
-    const beats: BeatPlan[] = plan.beats
-      .map((b: any, idx: number) => ({
-        beatId: Number.isFinite(b.beatId) ? b.beatId : (idx + 1),
-        priority: Number.isFinite(b.priority) ? b.priority : 3,
-        evidence: typeof b.evidence === "string" ? b.evidence : "",
-        beatText: typeof b.beatText === "string" ? b.beatText : "",
-        shots: Number.isFinite(b.shots) ? b.shots : 6
-      }))
-      .filter(b => b.beatText.trim().length > 0);
+  const parsed = safeJsonParse(cleanJson);
+  if (!parsed) return null;
 
-    const totalShots = Number.isFinite(plan.totalShots)
-      ? plan.totalShots
-      : beats.reduce((sum, b) => sum + (b.shots || 0), 0);
+  const plan = parsed.plan || parsed.p;
+  if (!plan || !Array.isArray(plan.beats)) return null;
 
-    if (beats.length === 0) return null;
-    return { totalShots, beats };
-  } catch (e) {
-    return null;
-  }
+  const beats: BeatPlan[] = plan.beats
+    .map((b: any, idx: number) => ({
+      beatId: Number.isFinite(b.beatId) ? b.beatId : (idx + 1),
+      priority: Number.isFinite(b.priority) ? b.priority : 3,
+      evidence: typeof b.evidence === "string" ? b.evidence : "",
+      beatText: typeof b.beatText === "string" ? b.beatText : "",
+      shots: Number.isFinite(b.shots) ? b.shots : 6
+    }))
+    .filter((b: BeatPlan) => b.beatText.trim().length > 0);
+
+  const totalShots = Number.isFinite(plan.totalShots)
+    ? plan.totalShots
+    : beats.reduce((sum: number, b: BeatPlan) => sum + (b.shots || 0), 0);
+
+  if (beats.length === 0) return null;
+  return { totalShots, beats };
 }
 
 async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number, count: number) {
   const response = await openai.chat.completions.create({
     model: "google/gemini-3-pro-preview",
     messages: [
-      // ✅ MOD（保留）：把 KB 独立成 system “参考设定资料”，降低其作为“剧情来源”的概率
       { role: "system", content: STORYBOARD_PROMPT },
       { role: "system", content: `【参考设定资料（只用于外貌/视觉一致性，严禁当作剧情来源）】\n${kbContext}` },
       {
@@ -419,17 +440,18 @@ async function fetchShotsBatch(scriptPart: string, kbContext: string, range: str
     response_format: { type: "json_object" }
   });
 
-  const rawText = response.choices[0].message.content || "";
+  const rawText = response.choices?.[0]?.message?.content || "";
   const cleanJson = rawText.replace(/json/g, "").replace(/```/g, "").trim();
-  try {
-    const parsed = JSON.parse(cleanJson);
+
+  const parsed = safeJsonParse(cleanJson);
+  if (parsed) {
     return parsed.shots || parsed.s || (Array.isArray(parsed) ? parsed : []);
-  } catch (e) {
-    const matches = cleanJson.match(/{"shotNumber":[\s\S]*?}/g);
-    return matches ? matches.map(m => {
-      try { return JSON.parse(m.endsWith('}') ? m : m + '}'); } catch { return null; }
-    }).filter(Boolean) : [];
   }
+
+  const matches = cleanJson.match(/{"shotNumber":[\s\S]*?}/g);
+  return matches ? matches.map(m => {
+    try { return JSON.parse(m.endsWith('}') ? m : m + '}'); } catch { return null; }
+  }).filter(Boolean) : [];
 }
 
 function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
@@ -465,18 +487,23 @@ export async function generateStoryboard(
   if (batchIndex > 0) return [];
 
   const dynamicPrompt = `${STORYBOARD_PROMPT}\n\n${STYLE_PROMPTS[style]}`;
+
+  // ✅ MOD：KB 限长（关键修复：避免上下文撑爆导致模型空/截断 JSON）
   const kbContext = kb.length > 0
-    ? kb.map(f => `【参考设定资料：${f.name}】\n${f.content}`).join('\n')
+    ? clampText(
+        kb.map(f => `【参考设定资料：${f.name}】\n${clampText(f.content, 6000)}`).join('\n'),
+        16000
+      )
     : "（暂无特定知识库）";
 
   try {
     const script = episode.script;
     console.log(`🚀 正在发起全量加权生成 (目标 50-60 镜，隔离模式 + 镜头预算 plan)...`);
 
-    // ✅ MOD（新增）：先让 AI 生成 plan（自己判断重点/带过 & 镜头数）
+    // ✅ MOD：先拿 plan
     const plan = await fetchStoryboardPlan(script, kbContext);
 
-    // 兜底：如果 plan 失败，则退回你原本的一次性 60 镜生成
+    // plan 失败兜底：回退一次性 60 镜
     let newRawShots: any[] = [];
     if (!plan) {
       console.warn("⚠️ 预算 plan 生成失败，已回退到一次性生成 60 镜");
@@ -488,10 +515,9 @@ export async function generateStoryboard(
         60
       );
     } else {
-      // ✅ MOD（新增）：按 plan 分段生成（重点段会自然分到更多镜头）
       let cursor = 1;
       for (const beat of plan.beats) {
-        const count = Math.max(1, Math.min(beat.shots || 1, 60)); // 单段安全阈值
+        const count = Math.max(1, Math.min(beat.shots || 1, 60));
         const range = `${cursor}-${cursor + count - 1}`;
 
         const beatShots = await fetchShotsBatch(
@@ -506,8 +532,6 @@ export async function generateStoryboard(
         cursor += count;
       }
 
-      // ✅ MOD（新增）：总数兜底到 50-60（不改你提示词，只做数量修正）
-      // 如果 plan 生成的总镜头稍微偏离，这里只做轻度截断/补齐（补齐用最后一段再要几镜）
       if (newRawShots.length > 60) newRawShots = newRawShots.slice(0, 60);
       if (newRawShots.length < 50) {
         const need = 50 - newRawShots.length;
@@ -524,7 +548,7 @@ export async function generateStoryboard(
       }
     }
 
-    // ✅ MOD（新增）：统一重编号，避免分段生成导致 shotNumber 混乱
+    // ✅ MOD：统一重编号，避免分段生成导致 shotNumber 混乱
     newRawShots = (newRawShots || []).map((s: any, idx: number) => ({
       ...s,
       shotNumber: idx + 1
@@ -535,7 +559,7 @@ export async function generateStoryboard(
       return injectActionCarryover(shot, prev);
     });
 
-    // ✅ MOD（保留）：越界检测 + 自动“单镜重生”兜底（防串集）
+    // ✅ MOD：越界检测 + 自动“单镜重生”兜底（防串集）
     const allowedNames = extractAllowedNamesFromScript(script);
     const fixedShots: Shot[] = [...processedNewShots];
 
@@ -552,7 +576,6 @@ export async function generateStoryboard(
       const outNames = findOutOfScopeNames(blob, allowedNames);
 
       const shouldFix = crossEpisode || outNames.length >= 2;
-
       if (!shouldFix) continue;
 
       try {
@@ -570,7 +593,7 @@ export async function generateStoryboard(
       }
     }
 
-    // ✅ MOD（新增）：修复后再次确保编号连续
+    // ✅ MOD：修复后再次确保编号连续
     return fixedShots.map((s, idx) => ({ ...s, shotNumber: idx + 1 }));
   } catch (err) {
     console.error(`分镜生成失败:`, err);
@@ -584,8 +607,12 @@ export async function regenerateSingleShot(
   shotToRegenerate: Shot,
   previousShot?: Shot
 ): Promise<Shot> {
+  // ✅ MOD：同样对单镜重生的 KB 做限长，避免截断/空返回
   const kbContext = kb.length > 0
-    ? kb.map(f => `【视觉字典/设定参考】：\n${f.content}`).join('\n')
+    ? clampText(
+        kb.map(f => `【视觉字典/设定参考】：\n${clampText(f.content, 6000)}`).join('\n'),
+        16000
+      )
     : "（暂无特定知识库）";
 
   const userPrompt = `
@@ -598,7 +625,6 @@ export async function regenerateSingleShot(
   const response = await openai.chat.completions.create({
     model: "google/gemini-3-pro-preview",
     messages: [
-      // ✅ MOD（保留）：同样拆分 KB 与本集剧本，降低串集概率
       { role: "system", content: STORYBOARD_PROMPT },
       { role: "system", content: `【参考设定资料（只用于外貌/视觉一致性，严禁当作剧情来源）】\n${kbContext}` },
       { role: "user", content: userPrompt }
@@ -606,14 +632,15 @@ export async function regenerateSingleShot(
     response_format: { type: "json_object" }
   });
 
-  const rawText = response.choices[0].message.content || "";
+  const rawText = response.choices?.[0]?.message?.content || "";
   const cleanJson = rawText.replace(/json/g, "").replace(/```/g, "").trim();
-  try {
-    const parsed = JSON.parse(cleanJson);
-    const newShotData = parsed.shot || (Array.isArray(parsed.shots) ? parsed.shots[0] : parsed);
-    return injectActionCarryover(newShotData, previousShot);
-  } catch (e) {
-    console.error("解析单镜头 JSON 失败:", e);
+
+  const parsed = safeJsonParse(cleanJson);
+  if (!parsed) {
+    console.error("解析单镜头 JSON 失败：模型返回为空或被截断");
     return shotToRegenerate;
   }
+
+  const newShotData = parsed.shot || (Array.isArray(parsed.shots) ? parsed.shots[0] : parsed);
+  return injectActionCarryover(newShotData, previousShot);
 }

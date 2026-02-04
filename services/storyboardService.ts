@@ -33,26 +33,20 @@ const STORYBOARD_PROMPT = `
 1. **本集目标剧本（Target Script）**：指在 User Message 中明确给出的文本。这是你**唯一**的剧情来源。
 2. **拍完即止**：镜头数随剧情自然生成（上限60），拍完【本集目标剧本】的文字内容后必须立即停止。，严禁续写，严禁跳跃到原著后续章节。
 
-【🚨 核心指令一：动作复杂度与原子化（针对 ▲ 符号）】
-1. **高动态识别**：若描述涉及多人冲突、位移、破坏（如：黑影扑人、淹没惨叫），必须执行“原子化拆解”，强制拆为 3-5 镜。
-2. **低动态保留**：若仅为单人神态、微动作（如：眉头一皱），保留为 1-2 镜，严禁拖沓。
-3. **物理四步法**：高潮动作必须拍出【威胁逼近 -> 瞬间撞击 -> 核心细节 -> 环境反馈】的完整过程。
+【🎬 核心导演协议一：动作与高潮 (▲ 符号)】
+1. **智能复杂度审计**：
+   - **高动态（高潮）**：涉及多人冲突、位移、超自然特效（如：黑影扑人、淹没惨叫），必须执行“原子化拆解”，强制拆为 3-5 镜，拍出[起手->爆发->接触->反馈]全过程。
+   - **低动态（细节）**：仅涉及神态、微动（如：眉头一皱、咳血），保留为 1-2 个精准特写，严禁拖沓。
+2. **高潮加权**：将 70% 的镜头额度分配给识别出的高潮动作段落。
 
-【🚨 核心指令二：文戏动态化（针对对白）】
-1. **对白切点（Beats）**：长对白严禁一镜到底。必须根据语义转折（如身份确认转为撩拨暗示）和环境指涉（提到周围环境时）切换镜头。
-2. **强制反应镜**：在对话中穿插听者的表情反应镜头（如震惊、冷笑、眯眼），增加张力。
+【🎬 核心导演协议二：文戏与对白 (名字:内容)】
+1. **对白切点（Beats）**：长对白严禁一镜到底。必须根据语义转折（身份确认转为撩拨暗示）和环境指涉（提到死人、煞风景时）切换镜头。
+2. **穿插反应镜**：长对话中必须穿插听者的表情反应（震惊、冷笑、眯眼），增加张力。
 
-【🎬 镜头拆解逻辑：智能复杂度审计】
-1. **强制下限 46 镜的填充策略**：若剧本短，通过增加 [侧面反应] 或 [意境空镜] 填充，严禁通过重复剧情来凑数。
-   - 若剧本文字较短，请通过增加 **[反应镜头]**（旁观者的惊恐、物体的颤动）或 **[意境空镜]** 来增加密度，而不是去拆分简单的表情。
-
-【🎬 核心规范：拒绝重复生成】
-1. **严格顺序执行**：你必须按照剧本的文字顺序往后拍。
-2. **禁止回溯**：如果 User 提示你“上接分镜状态”，说明前面的情节已经拍摄完成。你必须**立刻、直接**从接下来的新情节开始，绝对禁止重复描述已经出现过的动作或画面。
-
-【🎬 导演级权重分配逻辑】
-1. **识别高潮**：请通读下方 User Message 提供的【本集目标剧本】，识别其中的动作冲突点。
-2. **原子化扩充**：严禁平均分配镜头。平淡对话请大幅合并；高潮动作请执行“原子化拆解,
+【🎬 核心导演协议三：数量与重复控制 (防鬼打墙)】
+1. **强制下限 46 镜**：总数必须在 46-60 之间。内容不足时，通过增加 [侧面反应镜] 或 [环境意境镜] 填补。**绝对禁止重复同一个动作描述。**
+2. **绝对禁止回溯重拍**：你必须无条件从 User 提供的【待处理文字】第一行开始生成。严禁重新描述已经拍摄过的情节。
+3. **绝对剧情边界**：剧本文字结束，世界立即停止。严禁调用设定资料里的未来剧情。
 
 导演演绎区（受限创作）
 你只被允许做以下事情：
@@ -294,7 +288,6 @@ function safeJsonParse(raw: string): any | null {
   }
 }
 
-// 流式获取 API 响应
 async function fetchWithStream(messages: any[]): Promise<string> {
   const response = await openai.chat.completions.create({
     model: "google/gemini-3-pro-preview",
@@ -317,59 +310,55 @@ export async function generateStoryboard(
 ): Promise<Shot[]> {
   if (batchIndex > 0) return [];
 
-  const script = episode.script.trim();
-  // 设定资料只用于参考视觉特征
+  const fullScript = episode.script.trim();
   const kbContext = kb.length > 0
-    ? `【参考设定资料（仅供查询角色形象与技能颜色，严禁提取剧情）】：\n${kb.map(f => f.content).join('\n').slice(0, 8000)}`
+    ? `【视觉设定参考（仅限查外貌，严禁看剧情）】：\n${kb.map(f => f.content).join('\n').slice(0, 8000)}`
     : "（暂无）";
 
-  // 按行进行物理隔离，确保不切断对白或动作行
-  const lines = script.split('\n').filter(l => l.trim().length > 0);
+  // 精准行切分
+  const lines = fullScript.split('\n').filter(l => l.trim().length > 0);
   const midIndex = Math.floor(lines.length / 2);
   const scriptPart1 = lines.slice(0, midIndex).join('\n');
   const scriptPart2 = lines.slice(midIndex).join('\n');
-  const lastLineOfP1 = lines[midIndex - 1]; 
+  const pivotLine = lines[midIndex - 1]; // 第一阶段的最后一行
 
   try {
-    // --- 第一阶段：包含全集视野，但只生成前半部分 ---
-    console.log("🚀 [第一阶段] 正在分析对白节拍与武戏高潮 (目标 23-28 镜)...");
+    // --- 第一阶段：带全局视野分析，生成前半段 ---
+    console.log("🚀 [第一阶段] 全局分析高潮分布，生成 1-28 镜...");
     const rawContent1 = await fetchWithStream([
       { role: "system", content: STORYBOARD_PROMPT + (STYLE_PROMPTS[style] || "") },
       { role: "system", content: kbContext },
       { 
         role: "user", 
-        content: `【本集剧本全貌参考】：\n${script}\n\n【当前具体任务】：请仅针对剧本前半部分文字生成分镜。必须生成 23-28 镜，严格执行原子化拆解和对白切分规则。
-        
-【待处理文字内容】：\n${scriptPart1}`
+        content: `【本集完整目标剧本（仅供节奏识别参考）】：\n${fullScript}\n\n【当前具体任务】：请仅针对上述剧本的【前半部分内容】生成分镜。目标 23-28 镜，必须执行原子化拆解与对白切分。\n\n【待处理前半段内容】：\n${scriptPart1}`
       }
     ]);
 
     let shotsPart1 = safeJsonParse(rawContent1) || [];
     shotsPart1 = shotsPart1.map((s: any, i: number) => ({ ...s, shotNumber: i + 1 }));
     const p1Count = shotsPart1.length;
-    const lastShotDesc = shotsPart1[p1Count - 1]?.visualDescription || "";
+    const p1EndDesc = shotsPart1[p1Count - 1]?.visualDescription || "";
 
-    console.log(`✅ P1 完成。开始第二阶段衔接 (目标总数 46-60 镜)...`);
+    console.log(`✅ P1 已生成 ${p1Count} 镜。开始硬隔离生成 P2...`);
 
-    // --- 第二阶段：硬锚定衔接，绝对禁止回溯重复 ---
+    // --- 第二阶段：硬隔离，不传 Part1 文字，彻底防回溯 ---
     const rawContent2 = await fetchWithStream([
       { role: "system", content: STORYBOARD_PROMPT + (STYLE_PROMPTS[style] || "") },
       { role: "system", content: kbContext },
       { 
         role: "user", 
-        content: `【拍摄场记 - 严禁回头】：
-1. 已经拍完的最后一句剧本文字是：“${lastLineOfP1}”。
-2. 已经拍完的画面终点是：“${lastShotDesc}”。
+        content: `【场记记录 - 绝对红线】：
+1. 剧本文字 “${pivotLine}” 已拍摄完毕。
+2. 结束姿态：${p1EndDesc}。
 
-【当前任务起点】：
-请**立刻且仅从**接下来的文字开始生成分镜。你必须补齐剩余镜头，使两个阶段总数达到 46 镜以上。
+【当前目标任务】：
+请补齐剩余分镜，使两阶段总数达到 46 镜以上。你必须从接下来的文字开始生成，**绝对禁止**重复描述 “${pivotLine}” 及其之前的情节。
+
+【待处理后半部分剧本】：\n${scriptPart2}
 
 【强制指令】：
-- 你的第一个分镜编号必须是 ${p1Count + 1}。
-- **严禁重复**生成任何关于“${lastLineOfP1}”及其之前的情节。
-- 严格执行【对白切点】拆分长对白，并对带有 ▲ 符号的高动态动作进行【原子化拆解】。
-
-【待处理剧本后半部分】：\n${scriptPart2}` 
+- 你的首个编号为 ${p1Count + 1}。
+- 识别高动态 ▲ 内容并拆解，对长对白进行情绪节拍切镜，穿插反应镜头。` 
       }
     ]);
 
@@ -387,7 +376,7 @@ export async function generateStoryboard(
     }).slice(0, 60);
 
   } catch (err) {
-    console.error("生成异常:", err);
+    console.error("分镜生成中断:", err);
     throw err;
   }
 }
@@ -397,8 +386,8 @@ function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
   const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
   return {
     ...currentShot,
-    visualDescription: isOngoing ? `【衔接】${currentShot.visualDescription}` : currentShot.visualDescription,
-    viduPrompt: isOngoing ? `[Match Action] ${currentShot.viduPrompt}` : currentShot.viduPrompt
+    visualDescription: isOngoing ? `【接前动作】${currentShot.visualDescription}` : currentShot.visualDescription,
+    viduPrompt: isOngoing ? `[Match Continuity] ${currentShot.viduPrompt}` : currentShot.viduPrompt
   };
 }
 
@@ -412,7 +401,7 @@ export async function regenerateSingleShot(
 ): Promise<Shot> {
   const raw = await fetchWithStream([
     { role: "system", content: STORYBOARD_PROMPT },
-    { role: "user", content: `重新设计第 ${shotToRegenerate.shotNumber} 镜。如果是文戏请体现眼神戏，如果是武戏请体现动作冲击力。` }
+    { role: "user", content: `重新设计第 ${shotToRegenerate.shotNumber} 镜。请遵守【绝对边界】原则，严禁续写。` }
   ]);
   const parsed = safeJsonParse(raw);
   const newShotData = Array.isArray(parsed) ? parsed[0] : (parsed?.shot || parsed);

@@ -37,7 +37,7 @@ const STORYBOARD_PROMPT = `
 1. **识别物理信息量**：
    - **高复杂度（▲型高潮）**：若描述涉及多角色互动、快速位移、超自然特效或物理破坏（如：黑影扑人、法术对轰），**必须**执行原子化拆解（起手、爆发、接触、反馈），至少拆为 3-4 镜。
    - **低复杂度（▲型细节）**：若描述仅为神态变化、微表情、手部动作、静态姿势、简单动作（如：眉头一皱、手指划过锁骨），则保留为 1-2 个精准的特写镜头，严禁过度拆分导致节奏拖沓。
-2. **强制下限 46 镜的填充策略**：
+2. **强制下限 46 镜的填充策略**：若剧本短，通过增加 [侧面反应] 或 [意境空镜] 填充，严禁通过重复剧情来凑数。
    - 若剧本文字较短，请通过增加 **[反应镜头]**（旁观者的惊恐、物体的颤动）或 **[意境空镜]** 来增加密度，而不是去拆分简单的表情。
 3. **拍完即止**：剧本文字结束，世界立即停止，严禁续写下一集内容。
 4. **禁止回溯**：严禁重复生成已经拍摄过的情节。
@@ -277,11 +277,6 @@ viduPrompt 严禁将人物台词加入到viduPrompt里
 请返回 JSON 数组，包含：shotNumber, duration, shotType, movement, visualDescription, dialogue, emotion, viduPrompt。
 `;
 
-function clampText(text: string, maxChars: number): string {
-  if (!text) return "";
-  return text.length > maxChars ? text.slice(0, maxChars) + "\n..." : text;
-}
-
 function safeJsonParse(raw: string): any | null {
   const txt = (raw || "").replace(/```json/g, "").replace(/```/g, "").trim();
   if (!txt) return null;
@@ -317,56 +312,62 @@ export async function generateStoryboard(
 ): Promise<Shot[]> {
   if (batchIndex > 0) return [];
 
-  const script = episode.script;
+  const script = episode.script.trim();
   const kbContext = kb.length > 0
-    ? clampText(kb.map(f => `【设定参考】：${f.content}`).join('\n'), 10000)
+    ? `【参考设定资料】：\n${kb.map(f => f.content).join('\n').slice(0, 8000)}`
     : "（暂无）";
 
-  // 逻辑切分剧本
-  const mid = Math.floor(script.length / 2);
-  const splitIndex = script.lastIndexOf('\n', mid) !== -1 ? script.lastIndexOf('\n', mid) : mid;
-  const scriptPart1 = script.slice(0, splitIndex).trim();
-  const scriptPart2 = script.slice(splitIndex).trim();
+  // --- 物理切分优化 ---
+  const lines = script.split('\n').filter(l => l.trim().length > 0);
+  const midIndex = Math.floor(lines.length / 2);
+  
+  const scriptPart1Lines = lines.slice(0, midIndex);
+  const scriptPart2Lines = lines.slice(midIndex);
+  
+  const scriptPart1 = scriptPart1Lines.join('\n');
+  const scriptPart2 = scriptPart2Lines.join('\n');
+  const lastLineOfP1 = scriptPart1Lines[scriptPart1Lines.length - 1]; // 第一阶段的最后一句
 
   try {
-    // --- 第一阶段：23-28 镜 ---
-    console.log("🚀 [第一阶段] 正在分析内容复杂度并生成前半段...");
+    // --- 第一阶段 ---
+    console.log("🚀 [第一阶段] 正在生成前半段 (1-28镜)...");
     const rawContent1 = await fetchWithStream([
       { role: "system", content: STORYBOARD_PROMPT + (STYLE_PROMPTS[style] || "") },
       { role: "system", content: kbContext },
       { 
         role: "user", 
-        content: `【本集剧本参考】：\n${script}\n\n【第一阶段任务】：生成前半部分分镜。
+        content: `【当前任务】：请为以下【本集剧本前半部分】生成分镜。目标生成 23-28 镜。
         
-【要求】：
-1. 目标生成 **23-28** 个镜头。
-2. 识别动作复杂度：涉及“黑影扑人、淹没”等动态内容需拆解；单纯“表情、神态”内容保持精炼。
-【处理文字】：\n${scriptPart1}`
+【本集剧本前半部分】：\n${scriptPart1}`
       }
     ]);
 
     let shotsPart1 = safeJsonParse(rawContent1) || [];
     shotsPart1 = shotsPart1.map((s: any, i: number) => ({ ...s, shotNumber: i + 1 }));
     const p1Count = shotsPart1.length;
-    const p1LastText = scriptPart1.slice(-50); 
+    const lastShotDesc = shotsPart1[p1Count - 1]?.visualDescription || "";
 
-    console.log(`✅ P1完成。开始第二阶段 (目标补齐至 46-60 镜)...`);
+    console.log(`✅ P1 已生成 ${p1Count} 镜。正在执行硬锚定衔接 P2...`);
 
-    // --- 第二阶段：补齐总数 ---
+    // --- 第二阶段：强制跳过 P1 结尾 ---
     const rawContent2 = await fetchWithStream([
       { role: "system", content: STORYBOARD_PROMPT + (STYLE_PROMPTS[style] || "") },
       { role: "system", content: kbContext },
       { 
         role: "user", 
-        content: `【进度锚点】：已拍完“${p1LastText}”。接续画面：${shotsPart1[p1Count-1]?.visualDescription || "起始"}
+        content: `【拍摄场记 - 严禁回头】：
+1. 已经拍摄完成的最后一句剧本文字是：“${lastLineOfP1}”。
+2. 已经拍摄完成的最后一个画面描述是：“${lastShotDesc}”。
 
-【第二阶段任务】：生成后半部分分镜。目标使两阶段总镜头数达到 **46 镜以上**。
-【待处理文字】：\n${scriptPart2}
+【当前任务起点】：
+请**立刻且仅从**接下来的剧本文字开始生成分镜。总镜头数需补齐至 46 镜以上。
 
-【关键指令】：
-1. 从第 ${p1Count + 1} 镜开始。
-2. 识别高复杂度动作进行拆解；对低复杂度表情进行侧面反应补充。
-3. 严禁回溯情节，拍完文字即刻停止。`
+【待处理剧本内容】：\n${scriptPart2}
+
+【强制指令】：
+- 你的第一个分镜编号必须是 ${p1Count + 1}。
+- **严禁重复**生成任何关于“${lastLineOfP1}”及其之前的内容。
+- 直接进入“${scriptPart2Lines[0]}”的画面表现。` 
       }
     ]);
 
@@ -394,7 +395,7 @@ function injectActionCarryover(currentShot: any, prevShot?: any): Shot {
   const isOngoing = prevShot.actionState === "start" || prevShot.actionState === "ongoing";
   return {
     ...currentShot,
-    visualDescription: isOngoing ? `【衔接动作】${currentShot.visualDescription}` : currentShot.visualDescription,
+    visualDescription: isOngoing ? `【衔接】${currentShot.visualDescription}` : currentShot.visualDescription,
     viduPrompt: isOngoing ? `[Match Action] ${currentShot.viduPrompt}` : currentShot.viduPrompt
   };
 }
@@ -409,7 +410,7 @@ export async function regenerateSingleShot(
 ): Promise<Shot> {
   const raw = await fetchWithStream([
     { role: "system", content: STORYBOARD_PROMPT },
-    { role: "user", content: `重新设计第 ${shotToRegenerate.shotNumber} 镜。如果是动作戏请丰富细节。` }
+    { role: "user", content: `重新设计第 ${shotToRegenerate.shotNumber} 镜。` }
   ]);
   const parsed = safeJsonParse(raw);
   const newShotData = Array.isArray(parsed) ? parsed[0] : (parsed?.shot || parsed);

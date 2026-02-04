@@ -456,7 +456,7 @@ export async function regenerateSingleShot(
   重新设计分镜。
   【上文衔接】：${previousShot ? previousShot.visualDescription : "第一镜"}
   【原内容】：${shotToRegenerate.visualDescription}
-  【剧本】：${episode.script.slice(0, 1000)}...
+  【剧本】：${episode.script.slice(0, 500)}...
   `;
 
   const response = await openai.chat.completions.create({

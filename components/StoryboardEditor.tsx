@@ -13,13 +13,12 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
   // --- 状态管理 ---
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [currentBatch, setCurrentBatch] = useState(0); 
   const [selectedStyle, setSelectedStyle] = useState<ScriptStyle>('情绪流');
 
   // ✨ 本地存储唯一 ID
   const storageId = `storyboard_${episode.title}`;
 
-  // ✨ 修改：由云端保存改为本地浏览器保存
+  // ✨ 本地存储保存进度
   const saveToCloud = async (shots: Shot[]) => {
     try {
       localStorage.setItem(storageId, JSON.stringify(shots));
@@ -29,7 +28,7 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
     }
   };
 
-  // ✨ 修改：由云端恢复改为从本地浏览器恢复进度
+  // ✨ 从本地浏览器恢复进度
   useEffect(() => {
     const loadSavedWork = async () => {
       if (episode.shots && episode.shots.length > 0) return;
@@ -40,9 +39,8 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
           if (savedData && savedData.length > 0) {
             onUpdate({ 
               shots: savedData, 
-              status: savedData.length >= 50 ? 'completed' : 'generating' 
+              status: 'completed' 
             });
-            setCurrentBatch(Math.floor(savedData.length / 20) - 1);
             console.log("✅ 已恢复历史进度");
           }
         }
@@ -53,41 +51,18 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
     loadSavedWork();
   }, [episode.title, storageId, onUpdate]);
 
-  // 1. 初始生成逻辑
+  // 1. 初始全量生成逻辑 (改为一次性生成 50-60 镜)
   const handleGenerate = async () => {
     setIsGenerating(true);
     setError(null);
     try {
-      const shots = await generateStoryboard(episode, kb, selectedStyle);
-      onUpdate({ shots, status: 'generating' });
-      setCurrentBatch(0);
+      // 调用 service，batchIndex 传 0 触发全量生成
+      const shots = await generateStoryboard(episode, kb, 0, [], selectedStyle);
+      onUpdate({ shots, status: 'completed' });
       // ✨ 自动保存
       await saveToCloud(shots);
     } catch (err) {
       setError('生成失败。请检查 API 配置或网络。');
-      console.error(err);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  // 2. 继续生成后续逻辑
-  const handleContinue = async () => {
-    setIsGenerating(true);
-    setError(null);
-    try {
-      const nextBatch = currentBatch + 1;
-      const moreShots = await generateStoryboard(episode, kb, selectedStyle);
-      const updatedShots = [...episode.shots, ...moreShots];
-      onUpdate({ 
-        shots: updatedShots, 
-        status: nextBatch === 2 ? 'completed' : 'generating' 
-      });
-      setCurrentBatch(nextBatch);
-      // ✨ 自动保存
-      await saveToCloud(updatedShots);
-    } catch (err) {
-      setError('追加生成失败，请重试。');
       console.error(err);
     } finally {
       setIsGenerating(false);
@@ -110,7 +85,7 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
     }
   };
 
-  // 4. 导出 Word 逻辑（完整保留）
+  // 4. 导出 Word 逻辑
   const exportToWord = () => {
     if (!episode.shots || episode.shots.length === 0) {
       alert("没有可导出的分镜数据");
@@ -192,12 +167,12 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
               {episode.title}
               {episode.shots.length > 0 && (
                 <span className="ml-3 px-2 py-0.5 bg-indigo-600/20 text-indigo-400 text-[10px] rounded uppercase border border-indigo-600/30 font-black">
-                  50-60 镜深度拆解模式
+                  50-60 镜全量生成模式
                 </span>
               )}
             </h2>
             <div className="flex items-center space-x-4 mt-1">
-              <span className="text-xs text-gray-500 font-bold">创作进度：{episode.shots.length} 镜 (目标 50-60 镜)</span>
+              <span className="text-xs text-gray-500 font-bold">分镜总数：{episode.shots.length} 镜</span>
             </div>
           </div>
         </div>
@@ -235,7 +210,7 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
             }`}
           >
             {isGenerating ? (
-              <span className="text-sm">计算中...</span>
+              <span className="text-sm">全量计算中...</span>
             ) : (
               <span className="text-sm">{episode.shots.length > 0 ? '重置并重新生成' : '开始智能生成'}</span>
             )}
@@ -254,7 +229,7 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
         {isGenerating && episode.shots.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full py-20 text-center text-gray-400">
             <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-            <p className="font-bold tracking-widest text-blue-500 uppercase text-xs">正在执行【{selectedStyle}】原子化拆解...</p>
+            <p className="font-bold tracking-widest text-blue-500 uppercase text-xs">正在执行【{selectedStyle}】原子化全量拆解...</p>
           </div>
         )}
 
@@ -323,23 +298,6 @@ const StoryboardEditor: React.FC<StoryboardEditorProps> = ({ episode, kb, onUpda
                 </div>
               </div>
             ))}
-
-            {currentBatch < 2 && !isGenerating && (
-              <div className="flex justify-center py-10">
-                <button
-                  onClick={handleContinue}
-                  className="px-10 py-5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-2xl font-black text-lg shadow-2xl shadow-blue-900/40 transition-all hover:scale-105"
-                >
-                  继续生成后续镜头 (阶段 {currentBatch + 2} / 3)
-                </button>
-              </div>
-            )}
-            
-            {isGenerating && currentBatch < 2 && (
-              <div className="flex justify-center py-10 text-gray-400 animate-pulse font-bold">
-                AI 正在以【{selectedStyle}】拆解下一阶段中...
-              </div>
-            )}
           </div>
         )}
       </div>

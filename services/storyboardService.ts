@@ -257,24 +257,40 @@ viduPrompt 严禁将人物台词加入到viduPrompt里
 确保数组长度在 50-60 之间。
 `;
 
-// ✅ MOD: 从本集剧本中抽取“允许出现的人名集合”（用于越界检测）
+// ✅ MOD（新增）：镜头预算计划（不改你原提示词，只额外追加“流程硬约束”）
+const BUDGET_PLAN_INSTRUCTION = `
+【镜头预算强制流程（必须执行）】
+在生成分镜 shots 前，你必须先生成 plan（镜头预算表），然后严格按 plan 再生成 shots。
+1）将“本集剧本”切分为 3–8 个 Beat（段落）。每个 Beat 必须提供：
+- beatId: 数字
+- priority: 1~5（重点等级，只能依据本集剧本中“可见变化强度”判定）
+- evidence: 仅引用本集剧本中的1–2句原文作为证据（短句即可）
+- beatText: 该 Beat 的剧本文本（用于后续生成，必须来自本集剧本原文片段拼接）
+2）priority 判定标准（只能按本集剧本证据判定）：
+- 1：纯过场/信息交代/无局势变化
+- 2：轻微推进/简单互动
+- 3：紧张蓄力/威胁升级但未结算
+- 4：关键动作链条/主角压制或强势反制/局势明显改变
+- 5：主角高光爆发/胜负或身份等关键结算/强爽点落地
+3）你必须自行决定每个 Beat 的镜头数 shots，并满足硬约束：
+- priority=5 的 Beat 镜头数 ≥ priority=1 的 Beat 的 3 倍
+- 镜头最多的 Beat 必须属于 priority 4 或 5
+- priority=1~2 的 Beat 每段最多 2–4 镜（除非该段包含明确动作链条）
+- 总镜头数最终必须在 50–60
+4）输出结构必须是纯 JSON：{"plan": {...}} 或 {"plan": {...}, "shots": [...] }。
+`;
+
+// ✅ MOD（新增）：从本集剧本中抽取“允许出现的人名集合”（用于越界检测）
 function extractAllowedNamesFromScript(scriptPart: string): Set<string> {
   const names = new Set<string>();
-
-  // 常见剧本格式：角色名：对白 / 角色名（动作）：... / 人物：...
-  // 只抓“冒号/括号”前的中文段
   const lines = scriptPart.split(/\r?\n/);
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
 
-    // 例：萧沉砚（虚弱）：既如此……
-    // 例：云玉娇：无双道长，那贱人真的死透了吗？
-    // 例：管家（冷汗直流）：这……
     const m = trimmed.match(/^([\u4e00-\u9fa5]{1,8})(?=（|:|：)/);
     if (m?.[1]) names.add(m[1]);
 
-    // 兼容：人物：云玉娇、无双道长
     const m2 = trimmed.match(/^(人物|角色)\s*[:：]\s*([\u4e00-\u9fa5、，,\s]{2,})/);
     if (m2?.[2]) {
       const parts = m2[2].split(/[、，,\s]+/).map(s => s.trim()).filter(Boolean);
@@ -283,12 +299,10 @@ function extractAllowedNamesFromScript(scriptPart: string): Set<string> {
       }
     }
   }
-
-  // 兜底：如果没抓到，避免误杀，返回空集合（不做名字越界判定）
   return names;
 }
 
-// ✅ MOD: 检测是否含有“串集/前情/集数跳转”等明显越界标记
+// ✅ MOD（新增）：检测是否含有“串集/前情/集数跳转”等明显越界标记
 function hasCrossEpisodeMarkers(text: string): boolean {
   const markers = [
     /第\s*\d+\s*集/,
@@ -299,22 +313,19 @@ function hasCrossEpisodeMarkers(text: string): boolean {
   return markers.some(r => r.test(text));
 }
 
-// ✅ MOD: 判断某一镜是否出现“本集未出现的人名”（仅当 allowedNames 非空时启用）
+// ✅ MOD（新增）：判断某一镜是否出现“本集未出现的人名”（仅当 allowedNames 非空时启用）
 function findOutOfScopeNames(text: string, allowedNames: Set<string>): string[] {
   if (!allowedNames || allowedNames.size === 0) return [];
 
-  // 简单抓取：连续2~8个中文（可能包含人名/称谓/地名），再用 allowedNames 过滤
   const candidates = new Set<string>();
   const re = /[\u4e00-\u9fa5]{2,8}/g;
   let m: RegExpExecArray | null;
 
   while ((m = re.exec(text)) !== null) {
     const token = m[0];
-    // 排除一些常见非人名词（可按你项目再扩充）
     if (/^(镜头|画面|特写|近景|中景|远景|固定镜头|推镜|拉镜|摇镜|跟拍|室内|室外|夜|日|内|外|雷电|风|尘土|碎石|空气)$/.test(token)) {
       continue;
     }
-    // 排除“二小姐/王爷/管家/亲兵”等通用称谓（你如果希望也纳入约束，可以删掉这段）
     if (/^(王爷|管家|亲兵|侍卫|丫鬟|道长|将军|大人|公子|小姐|夫人|二小姐)$/.test(token)) {
       continue;
     }
@@ -323,9 +334,7 @@ function findOutOfScopeNames(text: string, allowedNames: Set<string>): string[] 
 
   const out: string[] = [];
   for (const c of candidates) {
-    // 如果候选词恰好是已知角色名 => ok
     if (allowedNames.has(c)) continue;
-    // 若候选词包含已知角色名（如“萧沉砚”在“萧沉砚手中”里）=> ok
     let containsKnown = false;
     for (const a of allowedNames) {
       if (c.includes(a) || a.includes(c)) {
@@ -338,11 +347,68 @@ function findOutOfScopeNames(text: string, allowedNames: Set<string>): string[] 
   return out;
 }
 
+type BeatPlan = {
+  beatId: number;
+  priority: number;      // 1-5
+  evidence: string;      // 1-2句原文
+  beatText: string;      // 该段剧本文本
+  shots: number;         // 该段镜头数
+};
+
+type StoryboardPlan = {
+  totalShots: number;
+  beats: BeatPlan[];
+};
+
+// ✅ MOD（新增）：生成“镜头预算 plan”，让 AI 自己判断重点/带过，并给出每段镜头数
+async function fetchStoryboardPlan(scriptPart: string, kbContext: string) : Promise<StoryboardPlan | null> {
+  const response = await openai.chat.completions.create({
+    model: "google/gemini-3-pro-preview",
+    messages: [
+      { role: "system", content: STORYBOARD_PROMPT },
+      { role: "system", content: `【参考设定资料（只用于外貌/视觉一致性，严禁当作剧情来源）】\n${kbContext}` },
+      {
+        role: "user",
+        content: `${BUDGET_PLAN_INSTRUCTION}\n\n【本集剧本（唯一剧情真理）】\n${scriptPart}\n\n【输出要求】请只返回纯 JSON：{"plan":{"totalShots":xx,"beats":[{"beatId":1,"priority":5,"evidence":"...","beatText":"...","shots":18},...]}}`
+      }
+    ],
+    response_format: { type: "json_object" }
+  });
+
+  const rawText = response.choices[0].message.content || "";
+  const cleanJson = rawText.replace(/json/g, "").replace(/```/g, "").trim();
+  try {
+    const parsed = JSON.parse(cleanJson);
+    const plan = parsed.plan || parsed.p;
+    if (!plan || !Array.isArray(plan.beats)) return null;
+
+    // 轻度清洗与兜底：保证 beatText / shots 有值
+    const beats: BeatPlan[] = plan.beats
+      .map((b: any, idx: number) => ({
+        beatId: Number.isFinite(b.beatId) ? b.beatId : (idx + 1),
+        priority: Number.isFinite(b.priority) ? b.priority : 3,
+        evidence: typeof b.evidence === "string" ? b.evidence : "",
+        beatText: typeof b.beatText === "string" ? b.beatText : "",
+        shots: Number.isFinite(b.shots) ? b.shots : 6
+      }))
+      .filter(b => b.beatText.trim().length > 0);
+
+    const totalShots = Number.isFinite(plan.totalShots)
+      ? plan.totalShots
+      : beats.reduce((sum, b) => sum + (b.shots || 0), 0);
+
+    if (beats.length === 0) return null;
+    return { totalShots, beats };
+  } catch (e) {
+    return null;
+  }
+}
+
 async function fetchShotsBatch(scriptPart: string, kbContext: string, range: string, startNo: number, count: number) {
   const response = await openai.chat.completions.create({
     model: "google/gemini-3-pro-preview",
     messages: [
-      // ✅ MOD: 把 KB 独立成 system “参考设定资料”，降低其作为“剧情来源”的概率
+      // ✅ MOD（保留）：把 KB 独立成 system “参考设定资料”，降低其作为“剧情来源”的概率
       { role: "system", content: STORYBOARD_PROMPT },
       { role: "system", content: `【参考设定资料（只用于外貌/视觉一致性，严禁当作剧情来源）】\n${kbContext}` },
       {
@@ -405,26 +471,74 @@ export async function generateStoryboard(
 
   try {
     const script = episode.script;
-    console.log(`🚀 正在发起全量加权生成 (目标 60 镜，隔离模式)...`);
+    console.log(`🚀 正在发起全量加权生成 (目标 50-60 镜，隔离模式 + 镜头预算 plan)...`);
 
-    const newRawShots = await fetchShotsBatch(
-      script,
-      kbContext,
-      "1-60",
-      1,
-      60
-    );
+    // ✅ MOD（新增）：先让 AI 生成 plan（自己判断重点/带过 & 镜头数）
+    const plan = await fetchStoryboardPlan(script, kbContext);
+
+    // 兜底：如果 plan 失败，则退回你原本的一次性 60 镜生成
+    let newRawShots: any[] = [];
+    if (!plan) {
+      console.warn("⚠️ 预算 plan 生成失败，已回退到一次性生成 60 镜");
+      newRawShots = await fetchShotsBatch(
+        script,
+        kbContext,
+        "1-60",
+        1,
+        60
+      );
+    } else {
+      // ✅ MOD（新增）：按 plan 分段生成（重点段会自然分到更多镜头）
+      let cursor = 1;
+      for (const beat of plan.beats) {
+        const count = Math.max(1, Math.min(beat.shots || 1, 60)); // 单段安全阈值
+        const range = `${cursor}-${cursor + count - 1}`;
+
+        const beatShots = await fetchShotsBatch(
+          beat.beatText,
+          kbContext,
+          range,
+          cursor,
+          count
+        );
+
+        newRawShots.push(...(Array.isArray(beatShots) ? beatShots : []));
+        cursor += count;
+      }
+
+      // ✅ MOD（新增）：总数兜底到 50-60（不改你提示词，只做数量修正）
+      // 如果 plan 生成的总镜头稍微偏离，这里只做轻度截断/补齐（补齐用最后一段再要几镜）
+      if (newRawShots.length > 60) newRawShots = newRawShots.slice(0, 60);
+      if (newRawShots.length < 50) {
+        const need = 50 - newRawShots.length;
+        const tailText = plan.beats[plan.beats.length - 1]?.beatText || script;
+        const extra = await fetchShotsBatch(
+          tailText,
+          kbContext,
+          `${newRawShots.length + 1}-${newRawShots.length + need}`,
+          newRawShots.length + 1,
+          need
+        );
+        newRawShots.push(...(Array.isArray(extra) ? extra : []));
+        if (newRawShots.length > 60) newRawShots = newRawShots.slice(0, 60);
+      }
+    }
+
+    // ✅ MOD（新增）：统一重编号，避免分段生成导致 shotNumber 混乱
+    newRawShots = (newRawShots || []).map((s: any, idx: number) => ({
+      ...s,
+      shotNumber: idx + 1
+    }));
 
     const processedNewShots = newRawShots.map((shot: any, index: number) => {
       const prev = newRawShots[index - 1];
       return injectActionCarryover(shot, prev);
     });
 
-    // ✅ MOD: 越界检测 + 自动“单镜重生”兜底（防串集）
+    // ✅ MOD（保留）：越界检测 + 自动“单镜重生”兜底（防串集）
     const allowedNames = extractAllowedNamesFromScript(script);
     const fixedShots: Shot[] = [...processedNewShots];
 
-    // 最多修复 N 个镜头，避免无限重试（可按你成本调整）
     const MAX_FIXES = 12;
     let fixes = 0;
 
@@ -437,8 +551,6 @@ export async function generateStoryboard(
       const crossEpisode = hasCrossEpisodeMarkers(blob);
       const outNames = findOutOfScopeNames(blob, allowedNames);
 
-      // 触发条件：明显串集标记 或 出现大量“本集未出现的人名候选”
-      // （阈值你可调：>=2 更稳，>=1 更严格）
       const shouldFix = crossEpisode || outNames.length >= 2;
 
       if (!shouldFix) continue;
@@ -454,12 +566,12 @@ export async function generateStoryboard(
         fixedShots[i] = regenerated;
         fixes += 1;
       } catch (e) {
-        // 重生失败就跳过，不影响整体输出
         console.warn(`⚠️ 单镜重生失败（第 ${s.shotNumber} 镜），已跳过`, e);
       }
     }
 
-    return fixedShots;
+    // ✅ MOD（新增）：修复后再次确保编号连续
+    return fixedShots.map((s, idx) => ({ ...s, shotNumber: idx + 1 }));
   } catch (err) {
     console.error(`分镜生成失败:`, err);
     throw err;
@@ -486,7 +598,7 @@ export async function regenerateSingleShot(
   const response = await openai.chat.completions.create({
     model: "google/gemini-3-pro-preview",
     messages: [
-      // ✅ MOD: 同样拆分 KB 与本集剧本，降低串集概率
+      // ✅ MOD（保留）：同样拆分 KB 与本集剧本，降低串集概率
       { role: "system", content: STORYBOARD_PROMPT },
       { role: "system", content: `【参考设定资料（只用于外貌/视觉一致性，严禁当作剧情来源）】\n${kbContext}` },
       { role: "user", content: userPrompt }
